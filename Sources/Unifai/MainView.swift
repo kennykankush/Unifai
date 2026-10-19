@@ -78,6 +78,14 @@ struct MainView: View {
         .background(WindowConfigurator(headerHeight: 64))
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: destination) { _, _ in search = "" }
+        .task {
+            // Record renewals that fell due while the app was closed, then check every 30 minutes.
+            while !Task.isCancelled {
+                announce(store.recordDueRenewals())
+                try? await Task.sleep(for: .seconds(1800))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in announce(store.recordDueRenewals()) }
         .onAppear {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
             AppRuntime.scheduleTestClick()
@@ -523,8 +531,10 @@ struct MainView: View {
                     Chip(text: relativeDays(days), tint: days < 0 ? Palette.negative : days <= 7 ? Palette.warning : .secondary)
                 }
             } else {
-                Text("Nothing scheduled").font(.system(size: 20, weight: .bold)).foregroundStyle(.secondary)
-                Button("Add Subscription") { editor = .subscription(nil) }.buttonStyle(PillButtonStyle(compact: true))
+                let detected = RenewalDetector.suggestions(store.state).count
+                Text(detected > 0 ? "\(detected) detected" : "Nothing scheduled").font(.system(size: 20, weight: .bold)).foregroundStyle(detected > 0 ? Color.primary : Color.secondary)
+                Button(detected > 0 ? "Review" : "Add Subscription") { if detected > 0 { destination = .subscriptions } else { editor = .subscription(nil) } }
+                    .buttonStyle(PillButtonStyle(kind: detected > 0 ? .primary : .secondary, compact: true))
             }
         }
         .surface(padding: 18, radius: 22)
@@ -562,6 +572,12 @@ struct MainView: View {
         }
     }
 
+    private func announce(_ recorded: [PaymentRecord]) {
+        guard !recorded.isEmpty else { return }
+        let list = recorded.map { "\($0.description) \($0.money.plainText) on \($0.paidAt.formatted(date: .abbreviated, time: .omitted))" }
+        store.notice = "Recorded \(recorded.count) renewal\(recorded.count == 1 ? "" : "s") from your schedules: \(list.joined(separator: "; ")). They are marked Auto until a receipt confirms them."
+    }
+
     /// Imports confirmed payments from a CSV the user picks. Nothing is read unless chosen here.
     private func importPayments() {
         let panel = NSOpenPanel()
@@ -575,6 +591,9 @@ struct MainView: View {
             let summary = try store.importPayments(rows)
             var lines = ["Imported \(summary.imported) payment\(summary.imported == 1 ? "" : "s")."]
             if summary.duplicates > 0 { lines.append("Skipped \(summary.duplicates) already recorded.") }
+            if summary.replaced > 0 { lines.append("Replaced \(summary.replaced) Auto renewal\(summary.replaced == 1 ? "" : "s") with receipts.") }
+            let detected = RenewalDetector.suggestions(store.state).count
+            if detected > 0 { lines.append("Found \(detected) recurring subscription\(detected == 1 ? "" : "s") to review in Subscriptions.") }
             if !summary.createdAccounts.isEmpty { lines.append("Added wallets: \(summary.createdAccounts.joined(separator: ", ")).") }
             store.notice = lines.joined(separator: " ")
         } catch {
@@ -618,7 +637,10 @@ struct MainView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 MoneyText(money: record.money, size: 15, prefix: refund ? "+" : "−")
                     .foregroundStyle(refund ? Palette.positive : Color.primary)
-                Text(refund ? "Refunded" : record.kind.rawValue).font(.system(size: 11, weight: .medium)).foregroundStyle(refund ? Palette.positive : .secondary)
+                HStack(spacing: 6) {
+                    if record.autoRecorded { Chip(text: "Auto", tint: Palette.accentInk, symbol: "arrow.triangle.2.circlepath").help("Recorded from a subscription schedule. Import the receipt or choose Confirm to mark it as verified.") }
+                    Text(refund ? "Refunded" : record.kind.rawValue).font(.system(size: 11, weight: .medium)).foregroundStyle(refund ? Palette.positive : .secondary)
+                }
             }
             if actions {
                 Button { editor = .payment(record) } label: { Image(systemName: "pencil") }
@@ -630,6 +652,7 @@ struct MainView: View {
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(RowHighlight())
         .contextMenu {
+            if record.autoRecorded { Button("Confirm Payment") { perform { try store.confirmPayment(record.id) } } }
             Button("Edit") { editor = .payment(record) }
             Button("Remove", role: .destructive) { removal = .init(title: "Remove Payment?", action: { try store.removePayment(record.id) }) }
         }
@@ -876,7 +899,15 @@ struct MainView: View {
         return VStack(alignment: .leading, spacing: 0) {
             pageHeader("Subscriptions", "Expected charges stay separate from payment history. Record each settled renewal when it happens.",
                        chip: monthly.first.map { Chip(text: "\($0.plainText) / month expected", tint: Palette.accent, symbol: "repeat") })
-            if items.isEmpty {
+            let detected = RenewalDetector.suggestions(store.state)
+            if !detected.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeading(title: "Detected from your payments", subtitle: "\(detected.count)")
+                    ForEach(detected) { suggestionRow($0) }
+                }
+                .padding(.bottom, 24)
+            }
+            if items.isEmpty && detected.isEmpty {
                 emptyState(store.state.subscriptions.isEmpty ? "No subscriptions yet" : "No matching subscriptions", "Add a schedule for a plan you already pay for.", "calendar",
                            action: store.state.subscriptions.isEmpty ? "Add Subscription" : nil) { editor = .subscription(nil) }.surface()
             }
@@ -884,6 +915,30 @@ struct MainView: View {
                 ForEach(items) { planCard($0) }
             }
         }
+    }
+
+    private func suggestionRow(_ suggestion: RenewalSuggestion) -> some View {
+        let linked = account(suggestion.accountID)
+        return HStack(spacing: 14) {
+            LogoCircle(integrationID: linked?.integrationID, size: 42, symbol: "calendar")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(suggestion.name).font(.system(size: 14, weight: .semibold))
+                Text("\(suggestion.cadence.rawValue) · next \(suggestion.nextRenewal.formatted(date: .abbreviated, time: .omitted)) · based on \(suggestion.basedOn) payments, last \(suggestion.lastPaid.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 4) {
+                MoneyText(money: suggestion.price, size: 16)
+                if suggestion.estimated { Chip(text: "Check price", tint: Palette.warning, symbol: "exclamationmark.triangle.fill").help("The last charge was prorated or prices changed. Confirm the full renewal price.") }
+            }
+            Button("Add Schedule") {
+                editor = .subscription(SubscriptionSchedule(accountID: suggestion.accountID, name: suggestion.name, price: suggestion.price, cadence: suggestion.cadence, nextRenewal: suggestion.nextRenewal))
+            }
+            .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
+            Button { perform { try store.dismissSuggestion(suggestion.id) } } label: { Image(systemName: "xmark") }
+                .buttonStyle(IconButtonStyle()).help("Dismiss").accessibilityLabel("Dismiss \(suggestion.name)")
+        }
+        .surface(padding: 16, radius: 20)
     }
 
     private func planCard(_ schedule: SubscriptionSchedule) -> some View {
@@ -910,7 +965,10 @@ struct MainView: View {
                 }
                 Spacer(minLength: 14)
                 Text(schedule.name).font(.system(size: 22, weight: .heavy)).tracking(-0.5).lineLimit(1)
-                Text(accountName(schedule.accountID)).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(accountName(schedule.accountID)).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(1)
+                    if schedule.recordsAutomatically { GlassChip(text: "Auto-records", symbol: "arrow.triangle.2.circlepath") }
+                }
                 HStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Next charge").font(.system(size: 11, weight: .medium)).opacity(0.7)

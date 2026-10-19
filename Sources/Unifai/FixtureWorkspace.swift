@@ -51,6 +51,15 @@ enum FixtureWorkspace {
         if !store.state.accounts.contains(where: { $0.integrationID == "openai-api" }) {
             try store.addAccount(integrationID: "openai-api", label: "Side projects", billingScope: "Synthetic organization", mode: .live, credential: "fixture-valid")
         }
+        // Synthetic monthly history so the demo shows a detected subscription.
+        if let claude = store.state.accounts.first(where: { $0.integrationID == "claude-subscription" }),
+           !store.state.payments.contains(where: { $0.reference.hasPrefix("SYNTHETIC-MAX") }) {
+            for (index, monthsAgo) in [3, 2, 1].enumerated() {
+                let date = Calendar.current.date(byAdding: .month, value: -monthsAgo, to: .now)!.addingTimeInterval(-86400 * 4)
+                try store.savePayment(.init(accountID: claude.id, description: "Claude Max 5x", kind: .subscription, money: Money(Decimal(string: "149.99")!, "SGD"),
+                                            paidAt: date, reference: "SYNTHETIC-MAX-\(index)"))
+            }
+        }
         for account in store.state.accounts where account.mode == .live { try vault.write("fixture-valid", accountID: account.id) }
     }
     static func balance(_ integration: String, _ credential: String, _ now: Date) async throws -> BalanceSnapshot {

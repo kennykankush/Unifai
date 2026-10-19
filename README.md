@@ -70,6 +70,10 @@ In **Payments**, record settled charges using a positive amount and an ISO curre
 
 To bring in past payments, choose **Import CSV** on the Payments page. The file needs a header row with `date` (YYYY-MM-DD), `amount` and `currency`, and can add `description`, `kind` (subscription, top-up, usage or refund), `account` (a catalogue service such as `claude-api`), `account_label` and `reference`. Rows already recorded for the same wallet and receipt reference are skipped, a missing wallet is created as a manual account, and any invalid row rejects the whole file so nothing is half-imported.
 
+Unifai also looks for recurring charges in your payments. A monthly or yearly pattern on one wallet appears under **Detected from your payments** on the Subscriptions page; **Add Schedule** opens it pre-filled, and **Check price** marks suggestions based on a prorated or changing charge.
+
+Schedules can record each renewal automatically. When a renewal date passes, Unifai adds the charge to Payments, marked **Auto**, and moves the schedule forward; this runs at launch, when the app becomes active and every 30 minutes. Importing the real receipt replaces the Auto entry, and **Confirm Payment** marks it as verified. Renewals dated before the schedule existed are never back-filled.
+
 In **Subscriptions**, save an expected amount, cadence and renewal date. A schedule creates no payments. After a renewal settles, choose **Record Settled Payment**, confirm the receipt, and update the next expected date. A ChatGPT plan shared with Codex should be recorded once.
 
 Money paid, provider-reported consumption, remaining credit and expected renewals stay separate. A USD 100 top-up followed by USD 30 of consumption is USD 100 paid and USD 70 remaining. Currencies are never combined. Payment history shows its start and whether you have confirmed completeness for that period; it does not claim a lifetime total from a current balance.

@@ -112,9 +112,12 @@ public struct PaymentRecord: Codable, Identifiable, Hashable {
     public var paidAt: Date
     public var reference: String
     public var createdAt: Date
-    public init(id: UUID = UUID(), accountID: UUID? = nil, description: String, kind: PaymentKind, money: Money, paidAt: Date, reference: String = "") {
+    /// Set when a schedule recorded this renewal automatically; cleared once confirmed by a receipt or by hand.
+    public var scheduleID: UUID?
+    public var autoRecorded: Bool { scheduleID != nil }
+    public init(id: UUID = UUID(), accountID: UUID? = nil, description: String, kind: PaymentKind, money: Money, paidAt: Date, reference: String = "", scheduleID: UUID? = nil) {
         self.id = id; self.accountID = accountID; self.description = description; self.kind = kind
-        self.money = money; self.paidAt = paidAt; self.reference = reference; self.createdAt = .now
+        self.money = money; self.paidAt = paidAt; self.reference = reference; self.createdAt = .now; self.scheduleID = scheduleID
     }
 }
 
@@ -130,9 +133,70 @@ public struct SubscriptionSchedule: Codable, Identifiable, Hashable {
     public var price: Money
     public var cadence: BillingCadence
     public var nextRenewal: Date
-    public init(id: UUID = UUID(), accountID: UUID? = nil, name: String, price: Money, cadence: BillingCadence, nextRenewal: Date) {
+    /// Record each renewal as a payment when it falls due. Nil (older schedules) means on.
+    public var autoRecord: Bool?
+    /// Renewals dated before this are never recorded automatically, so no history is invented.
+    public var createdAt: Date?
+    public var recordsAutomatically: Bool { autoRecord != false }
+    public init(id: UUID = UUID(), accountID: UUID? = nil, name: String, price: Money, cadence: BillingCadence, nextRenewal: Date,
+                autoRecord: Bool = true, createdAt: Date = .now) {
         self.id = id; self.accountID = accountID; self.name = name; self.price = price
-        self.cadence = cadence; self.nextRenewal = nextRenewal
+        self.cadence = cadence; self.nextRenewal = nextRenewal; self.autoRecord = autoRecord; self.createdAt = createdAt
+    }
+    public func advanced(from date: Date) -> Date {
+        Calendar.current.date(byAdding: cadence == .monthly ? .month : .year, value: 1, to: date) ?? date.addingTimeInterval(cadence == .monthly ? 30 * 86400 : 365 * 86400)
+    }
+}
+
+/// A recurring charge spotted in recorded payments, offered for confirmation before it becomes a schedule.
+public struct RenewalSuggestion: Identifiable, Equatable {
+    public var id: String
+    public var accountID: UUID?
+    public var name: String
+    public var price: Money
+    public var cadence: BillingCadence
+    public var nextRenewal: Date
+    public var lastPaid: Date
+    public var basedOn: Int
+    /// The price comes from a prorated or changing charge, so it needs checking.
+    public var estimated: Bool
+}
+
+public enum RenewalDetector {
+    public static func suggestions(_ state: PersistentState, now: Date = .now) -> [RenewalSuggestion] {
+        let dismissed = Set(state.dismissedSuggestions ?? [])
+        let scheduled = Set(state.subscriptions.compactMap(\.accountID))
+        let confirmed = state.payments.filter { $0.kind == .subscription && !$0.autoRecorded }
+        let groups = Dictionary(grouping: confirmed) { "\($0.accountID?.uuidString ?? "none")|\($0.money.currency)" }
+        var results: [RenewalSuggestion] = []
+        for (key, group) in groups {
+            guard let accountID = group.first?.accountID, !scheduled.contains(accountID), !dismissed.contains(key), group.count >= 2 else { continue }
+            let sorted = group.sorted { $0.paidAt < $1.paidAt }
+            // Ignore same-period charges such as an upgrade and a renewal on the same day.
+            var gaps: [Double] = []
+            for (previous, next) in zip(sorted, sorted.dropFirst()) {
+                let days = next.paidAt.timeIntervalSince(previous.paidAt) / 86400
+                if days >= 20 { gaps.append(days) }
+            }
+            let recent = Array(gaps.suffix(4)).sorted()
+            guard !recent.isEmpty else { continue }
+            let median = recent[recent.count / 2]
+            let cadence: BillingCadence
+            if (25...45).contains(median) { cadence = .monthly } else if (340...390).contains(median) { cadence = .yearly } else { continue }
+            let last = sorted.last!
+            let period: Double = cadence == .monthly ? 31 : 366
+            // A plan with no charge for more than one and a half periods has probably lapsed.
+            guard now.timeIntervalSince(last.paidAt) / 86400 <= period * 1.5 else { continue }
+            let template = SubscriptionSchedule(accountID: accountID, name: "", price: last.money, cadence: cadence, nextRenewal: last.paidAt)
+            var next = template.advanced(from: last.paidAt)
+            while next < Calendar.current.startOfDay(for: now) { next = template.advanced(from: next) }
+            let lastThree = sorted.suffix(3).map(\.money.amount)
+            let upgrade = last.description.range(of: "upgrade", options: .caseInsensitive) != nil
+            let name = last.description.replacingOccurrences(of: " (upgrade)", with: "", options: .caseInsensitive)
+            results.append(RenewalSuggestion(id: key, accountID: accountID, name: name, price: last.money, cadence: cadence, nextRenewal: next,
+                                             lastPaid: last.paidAt, basedOn: sorted.count, estimated: upgrade || Set(lastThree).count > 1))
+        }
+        return results.sorted { $0.nextRenewal < $1.nextRenewal }
     }
 }
 
@@ -217,6 +281,7 @@ public struct PersistentState: Codable, Equatable {
     public var historyCoverage: HistoryCoverage?
     public var githubRequests: [Date]?
     public var githubBackoffUntil: Date?
+    public var dismissedSuggestions: [String]?
     public init() {}
 }
 

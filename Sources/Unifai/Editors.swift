@@ -164,6 +164,7 @@ struct SubscriptionEditor: View {
     @State private var currency: String
     @State private var cadence: BillingCadence
     @State private var renewal: Date
+    @State private var autoRecord: Bool
     @State private var error: String?
     init(schedule: SubscriptionSchedule?) {
         self.schedule = schedule
@@ -173,6 +174,7 @@ struct SubscriptionEditor: View {
         _currency = State(initialValue: schedule?.price.currency ?? "USD")
         _cadence = State(initialValue: schedule?.cadence ?? .monthly)
         _renewal = State(initialValue: schedule?.nextRenewal ?? .now)
+        _autoRecord = State(initialValue: schedule?.recordsAutomatically ?? true)
     }
     var body: some View {
         EditorFrame(title: "Subscription Schedule", saveLabel: "Save Schedule", error: error, save: save) {
@@ -183,13 +185,20 @@ struct SubscriptionEditor: View {
                 TextField("Currency", text: $currency, prompt: Text("USD"))
                 Picker("Cadence", selection: $cadence) { ForEach(BillingCadence.allCases) { Text($0.rawValue).tag($0) } }
                 DatePicker("Next Expected Renewal", selection: $renewal, displayedComponents: .date)
-            } footer: { Text("This records an expected charge. It does not change your provider plan or add past payments. Record each completed renewal separately and update its next date.") }
+                Toggle("Record each renewal automatically when it's due", isOn: $autoRecord)
+            } footer: { Text(autoRecord
+                ? "On the renewal date Unifai adds the charge to Payments, marked Auto, and moves this schedule forward. Importing the real receipt replaces the Auto entry. Dates before today are never back-filled."
+                : "This only tracks the expected charge. Record each completed renewal yourself and update its next date.") }
         }
     }
     private func save() {
         do {
             guard let value = Money.parseAmount(amount) else { throw ValidationError.message("Enter an expected amount such as 20.00.") }
-            try store.saveSubscription(.init(id: schedule?.id ?? UUID(), accountID: account, name: name.trimmingCharacters(in: .whitespacesAndNewlines), price: Money(value, currency.trimmingCharacters(in: .whitespacesAndNewlines)), cadence: cadence, nextRenewal: renewal))
+            let existing = schedule.flatMap { schedule in store.state.subscriptions.first { $0.id == schedule.id } }
+            try store.saveSubscription(.init(id: schedule?.id ?? UUID(), accountID: account, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                             price: Money(value, currency.trimmingCharacters(in: .whitespacesAndNewlines)), cadence: cadence, nextRenewal: renewal,
+                                             autoRecord: autoRecord, createdAt: existing?.createdAt ?? .now))
+            _ = store.recordDueRenewals()
             dismiss()
         } catch { self.error = error.localizedDescription }
     }

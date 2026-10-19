@@ -49,6 +49,7 @@ public enum AgentReport {
         public var paidAt: Date
         public var account: String?
         public var reference: String?
+        public var autoRecorded: Bool
     }
 
     public struct Spending: Codable, Equatable {
@@ -134,9 +135,9 @@ public enum AgentReport {
                 Payment(description: record.description, kind: record.kind.rawValue, amount: Amount(record.money),
                         signedAmount: record.kind == .refund ? "-\(record.money.amount)" : "\(record.money.amount)",
                         paidAt: record.paidAt, account: accountName(state, record.accountID),
-                        reference: record.reference.isEmpty ? nil : record.reference)
+                        reference: record.reference.isEmpty ? nil : record.reference, autoRecorded: record.autoRecorded)
             },
-            note: "Money paid from confirmed receipts the user recorded. Refunds are subtracted. Not a lifetime total unless history is confirmed complete.")
+            note: "Money paid from receipts the user recorded, plus renewals recorded automatically from subscription schedules (autoRecorded: true) until a receipt confirms them. Refunds are subtracted. Not a lifetime total unless history is confirmed complete.")
     }
 
     public static func renewals(_ state: PersistentState, withinDays: Int? = nil, now: Date = .now) -> [Renewal] {

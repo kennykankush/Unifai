@@ -22,6 +22,8 @@ public enum PaymentImport {
     public struct Summary: Equatable {
         public var imported = 0
         public var duplicates = 0
+        /// Automatically recorded renewals superseded by imported receipts.
+        public var replaced = 0
         public var createdAccounts: [String] = []
         public init() {}
     }

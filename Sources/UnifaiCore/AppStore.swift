@@ -124,6 +124,13 @@ public final class AppStore: ObservableObject {
                 }
                 let record = PaymentRecord(accountID: accountID, description: row.description, kind: row.kind, money: row.money, paidAt: row.paidAt, reference: row.reference)
                 let day = Calendar.current.startOfDay(for: row.paidAt)
+                // A real receipt supersedes the automatic entry for the same renewal.
+                if row.kind == .subscription, let accountID {
+                    let before = next.payments.count
+                    next.payments.removeAll { $0.autoRecorded && $0.accountID == accountID && $0.money.currency == row.money.currency
+                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 5 * 86400 }
+                    summary.replaced += before - next.payments.count
+                }
                 let duplicate = next.payments.contains { existing in
                     guard existing.accountID == accountID else { return false }
                     if !row.reference.isEmpty { return existing.reference.caseInsensitiveCompare(row.reference) == .orderedSame }
@@ -163,6 +170,46 @@ public final class AppStore: ObservableObject {
         }
     }
     public func removeSubscription(_ id: UUID) throws { try change { $0.subscriptions.removeAll { $0.id == id } } }
+
+    /// Records every renewal that has fallen due for schedules set to record automatically, then
+    /// moves each schedule to its next date. Renewals dated before the schedule existed are left
+    /// for the user to confirm, so no past payments are invented. Safe to call repeatedly.
+    @discardableResult
+    public func recordDueRenewals(now: Date = .now) -> [PaymentRecord] {
+        guard loadFailure == nil else { return [] }
+        var recorded: [PaymentRecord] = []
+        do {
+            try change { next in
+                for index in next.subscriptions.indices where next.subscriptions[index].recordsAutomatically {
+                    var schedule = next.subscriptions[index]
+                    if schedule.createdAt == nil { schedule.createdAt = now }
+                    let earliest = Calendar.current.startOfDay(for: schedule.createdAt!)
+                    var guardCount = 0
+                    while schedule.nextRenewal <= now, schedule.nextRenewal >= earliest, guardCount < 60 {
+                        guardCount += 1
+                        let day = schedule.nextRenewal.formatted(.iso8601.year().month().day())
+                        let payment = PaymentRecord(accountID: schedule.accountID, description: schedule.name, kind: .subscription, money: schedule.price,
+                                                    paidAt: schedule.nextRenewal, reference: "auto-\(schedule.id.uuidString.prefix(8))-\(day)", scheduleID: schedule.id)
+                        if !next.payments.contains(where: { $0.reference == payment.reference && $0.accountID == payment.accountID }) {
+                            next.payments.append(payment); recorded.append(payment)
+                        }
+                        schedule.nextRenewal = schedule.advanced(from: schedule.nextRenewal)
+                    }
+                    next.subscriptions[index] = schedule
+                }
+            }
+        } catch { notice = "Could not record due renewals: \(error.localizedDescription)"; return [] }
+        return recorded
+    }
+
+    /// Marks an automatically recorded renewal as confirmed by the user.
+    public func confirmPayment(_ id: UUID) throws {
+        try change { next in if let index = next.payments.firstIndex(where: { $0.id == id }) { next.payments[index].scheduleID = nil } }
+    }
+
+    public func dismissSuggestion(_ id: String) throws {
+        try change { next in next.dismissedSuggestions = Array(Set((next.dismissedSuggestions ?? []) + [id])).sorted() }
+    }
     private func validateAccount(_ id: UUID?) throws {
         if let id, !state.accounts.contains(where: { $0.id == id }) { throw ValidationError.message("Choose an existing account.") }
     }
