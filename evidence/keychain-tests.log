@@ -1,0 +1,21 @@
+[0/1] Planning build
+Building for debugging...
+[0/4] Write swift-version--58304C5D6DBC2206.txt
+Build complete! (0.12s)
+Test Suite 'Selected tests' started at 2026-10-19 00:03:04.342.
+Test Suite 'UnifaiPackageTests.xctest' started at 2026-10-19 00:03:04.348.
+Test Suite 'KeychainTests' started at 2026-10-19 00:03:04.348.
+Test Case '-[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation]' started.
+/Users/hamulia/dev/unifai/Tests/UnifaiCoreTests/KeychainTests.swift:12: error: -[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation] : XCTAssertNil failed: threw error "message("Keychain operation failed (-50). Unlock your login Keychain and try again.")"
+/Users/hamulia/dev/unifai/Sources/UnifaiCore/Credentials.swift:47: error: -[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation] : failed: caught error: "message("Keychain operation failed (-50). Unlock your login Keychain and try again.")"
+Test Case '-[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation]' failed (0.036 seconds).
+Test Suite 'KeychainTests' failed at 2026-10-19 00:03:04.384.
+	 Executed 1 test, with 2 failures (2 unexpected) in 0.036 (0.036) seconds
+Test Suite 'UnifaiPackageTests.xctest' failed at 2026-10-19 00:03:04.384.
+	 Executed 1 test, with 2 failures (2 unexpected) in 0.036 (0.036) seconds
+Test Suite 'Selected tests' failed at 2026-10-19 00:03:04.384.
+	 Executed 1 test, with 2 failures (2 unexpected) in 0.036 (0.042) seconds
+◇ Test run started.
+↳ Testing Library Version: 1085
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

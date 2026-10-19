@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+dist/
+.qa/
+.DS_Store
+*.xcuserstate
+HANDOFF.md

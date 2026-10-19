@@ -1,0 +1,9 @@
+[0/1] Planning build
+Building for production...
+[0/4] Write sources
+[2/4] Write swift-version--58304C5D6DBC2206.txt
+[4/5] Compiling UnifaiCore AppStore.swift
+[5/6] Compiling Unifai Editors.swift
+[5/7] Write Objects.LinkFileList
+[6/7] Linking Unifai
+Build complete! (6.11s)

@@ -1,0 +1,212 @@
+import Foundation
+import Combine
+
+@MainActor
+public final class AppStore: ObservableObject {
+    public typealias BalanceLoader = (String, String, Date) async throws -> BalanceSnapshot
+    public typealias ReleaseLoader = (WatchedRepository, Date) async throws -> GitHubFetchResult
+    @Published public private(set) var state = PersistentState()
+    @Published public private(set) var refreshingAccounts: Set<UUID> = []
+    @Published public private(set) var refreshingRepositories: Set<UUID> = []
+    @Published public private(set) var loadFailure: String?
+    @Published public var notice: String?
+    public let repository: StateRepository
+    private let vault: CredentialVault
+    private let balances: BalanceLoader
+    private let releases: ReleaseLoader
+
+    public init(repository: StateRepository, vault: CredentialVault = KeychainVault(),
+                balances: @escaping BalanceLoader = { try await BalanceClient().fetch(integrationID: $0, credential: $1, now: $2) },
+                releases: @escaping ReleaseLoader = { try await GitHubClient().fetch($0, now: $1) }) {
+        self.repository = repository; self.vault = vault; self.balances = balances; self.releases = releases
+        do { state = try repository.load() }
+        catch { loadFailure = "Could not load saved data: \(error.localizedDescription) Restore state.json from a backup, then restart. The original file has been preserved; saving is disabled." }
+    }
+    private func change(_ update: (inout PersistentState) throws -> Void) throws {
+        guard loadFailure == nil else { throw ValidationError.message("Saving is disabled because the saved data could not be loaded.") }
+        var next = state
+        try update(&next)
+        try repository.save(next)
+        state = next
+    }
+    private func validateCredential(_ credential: String) throws -> String {
+        let value = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= 4096, value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            throw ValidationError.message("Enter a credential without line breaks.")
+        }
+        return value
+    }
+    public func addAccount(integrationID: String, label: String, billingScope: String, mode: ConnectionMode, credential: String = "") throws {
+        guard loadFailure == nil else { throw ValidationError.message("Repair the saved data before adding an account.") }
+        guard let integration = Catalogue.integration(integrationID), integration.category != .discovery, integration.category != .development else {
+            throw ValidationError.message("Choose a financial service from the catalogue.")
+        }
+        let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let owner = billingScope.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw ValidationError.message("Give this account a label.") }
+        guard !state.accounts.contains(where: { $0.integrationID == integrationID && $0.label.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw ValidationError.message("An account with this label already exists for this service.")
+        }
+        if mode == .live {
+            guard integration.status == .ready else { throw ValidationError.message("This connector is planned. Use manual records instead.") }
+            guard !owner.isEmpty else { throw ValidationError.message("Name the billing owner so keys for the same account are not counted twice.") }
+            guard !state.accounts.contains(where: { $0.mode == .live && $0.integrationID == integrationID && $0.billingScope.caseInsensitiveCompare(owner) == .orderedSame }) else {
+                throw ValidationError.message("That billing owner is already connected. Replace its key instead of adding the balance again.")
+            }
+        }
+        let account = ConnectedAccount(integrationID: integrationID, label: name, billingScope: owner, mode: mode)
+        if mode == .live { try vault.write(try validateCredential(credential), accountID: account.id) }
+        do { try change { $0.accounts.append(account) } }
+        catch {
+            if mode == .live { try? vault.delete(accountID: account.id) }
+            throw error
+        }
+    }
+    public func updateAccount(_ id: UUID, label: String, credential: String) throws {
+        guard let account = state.accounts.first(where: { $0.id == id }), !refreshingAccounts.contains(id), loadFailure == nil else {
+            throw ValidationError.message("Wait for the account refresh to finish, then try again.")
+        }
+        let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !state.accounts.contains(where: { $0.id != id && $0.integrationID == account.integrationID && $0.label.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw ValidationError.message("Enter a unique account label for this service.")
+        }
+        let replacing = account.mode == .live && !credential.isEmpty
+        let previous = replacing ? try vault.read(accountID: id) : nil
+        if replacing { try vault.write(try validateCredential(credential), accountID: id) }
+        do {
+            try change { next in
+                let index = next.accounts.firstIndex { $0.id == id }!
+                next.accounts[index].label = name
+                if replacing { next.accounts[index].lastError = nil; next.accounts[index].lastAttempt = nil }
+            }
+        } catch {
+            if replacing {
+                if let previous { try? vault.write(previous, accountID: id) }
+                else { try? vault.delete(accountID: id) }
+            }
+            throw error
+        }
+    }
+    public func removeAccount(_ id: UUID) throws {
+        guard !refreshingAccounts.contains(id), loadFailure == nil else { throw ValidationError.message("Wait for the refresh to finish.") }
+        guard !state.payments.contains(where: { $0.accountID == id }), !state.subscriptions.contains(where: { $0.accountID == id }) else {
+            throw ValidationError.message("This account has financial records. Remove or reassign those records first.")
+        }
+        let previous = try vault.read(accountID: id)
+        try vault.delete(accountID: id)
+        do { try change { $0.accounts.removeAll { $0.id == id } } }
+        catch { if let previous { try? vault.write(previous, accountID: id) }; throw error }
+    }
+    public func savePayment(_ record: PaymentRecord, now: Date = .now) throws {
+        try Ledger.validate(record, existing: state.payments, now: now)
+        try validateAccount(record.accountID)
+        try change { next in
+            if let index = next.payments.firstIndex(where: { $0.id == record.id }) { next.payments[index] = record }
+            else { next.payments.append(record) }
+            if let coverage = next.historyCoverage, record.paidAt < coverage.start {
+                next.historyCoverage = .init(start: record.paidAt, completeForPeriod: false)
+            }
+        }
+    }
+    public func removePayment(_ id: UUID) throws {
+        try change { next in
+            next.payments.removeAll { $0.id == id }
+            if next.historyCoverage != nil { next.historyCoverage?.completeForPeriod = false }
+        }
+    }
+    public func saveSubscription(_ schedule: SubscriptionSchedule) throws {
+        try Ledger.validate(schedule); try validateAccount(schedule.accountID)
+        try change { next in
+            if let index = next.subscriptions.firstIndex(where: { $0.id == schedule.id }) { next.subscriptions[index] = schedule }
+            else { next.subscriptions.append(schedule) }
+        }
+    }
+    public func removeSubscription(_ id: UUID) throws { try change { $0.subscriptions.removeAll { $0.id == id } } }
+    private func validateAccount(_ id: UUID?) throws {
+        if let id, !state.accounts.contains(where: { $0.id == id }) { throw ValidationError.message("Choose an existing account.") }
+    }
+    public func setCoverage(start: Date, complete: Bool, now: Date = .now) throws {
+        guard start <= now, state.payments.allSatisfy({ $0.paidAt >= start }) else {
+            throw ValidationError.message("Coverage must start on or before the earliest payment, and cannot start in the future.")
+        }
+        try change { $0.historyCoverage = .init(start: start, completeForPeriod: complete) }
+    }
+    public func refreshAccount(_ id: UUID, now: Date = .now) async {
+        guard let index = state.accounts.firstIndex(where: { $0.id == id }), state.accounts[index].mode == .live,
+              !refreshingAccounts.contains(id), loadFailure == nil else { return }
+        if let attempt = state.accounts[index].lastAttempt, now.timeIntervalSince(attempt) < 60 {
+            notice = "Wait one minute between balance refreshes for this account."; return
+        }
+        refreshingAccounts.insert(id)
+        defer { refreshingAccounts.remove(id) }
+        do {
+            try change { $0.accounts[index].lastAttempt = now }
+            let account = state.accounts[index]
+            guard let credential = try vault.read(accountID: id) else { throw ConnectorError.missingCredential }
+            let snapshot = try await balances(account.integrationID, credential, now)
+            try change { next in
+                guard let current = next.accounts.firstIndex(where: { $0.id == id }) else { return }
+                next.accounts[current].snapshot = snapshot; next.accounts[current].lastError = nil
+            }
+        } catch {
+            // Never persist a response body, request headers or credential in errors.
+            let message = Self.safeError(error)
+            do { try change { next in if let current = next.accounts.firstIndex(where: { $0.id == id }) { next.accounts[current].lastError = message } } }
+            catch { notice = "Could not save refresh status: \(error.localizedDescription)" }
+        }
+    }
+    public func addRepository(_ input: String, includePrereleases: Bool) throws {
+        guard let slug = WatchedRepository.parseSlug(input) else { throw ValidationError.message("Enter a public GitHub repository as owner/name or its HTTPS URL.") }
+        guard state.repositories.count < 10 else { throw ValidationError.message("This build supports at most 10 watched repositories.") }
+        guard !state.repositories.contains(where: { $0.slug.caseInsensitiveCompare(slug) == .orderedSame }) else { throw ValidationError.message("You already follow this repository.") }
+        try change { $0.repositories.append(.init(slug: slug, includePrereleases: includePrereleases)) }
+    }
+    public func setPrereleases(_ id: UUID, include: Bool) throws {
+        try change { next in if let index = next.repositories.firstIndex(where: { $0.id == id }) { next.repositories[index].includePrereleases = include } }
+    }
+    public func removeRepository(_ id: UUID) throws {
+        guard !refreshingRepositories.contains(id) else { throw ValidationError.message("Wait for the repository refresh to finish.") }
+        try change { $0.repositories.removeAll { $0.id == id } }
+    }
+    public func refreshRepository(_ id: UUID, now: Date = .now) async {
+        guard let index = state.repositories.firstIndex(where: { $0.id == id }), !refreshingRepositories.contains(id), loadFailure == nil else { return }
+        let until = max(state.repositories[index].nextAllowedRefresh ?? .distantPast, state.githubBackoffUntil ?? .distantPast)
+        if until > now {
+            notice = "GitHub refresh available after \(until.formatted(date: .omitted, time: .shortened))."; return
+        }
+        let recent = (state.githubRequests ?? []).filter { now.timeIntervalSince($0) < 3600 }
+        guard recent.count < 20 else { notice = "The local budget of 20 GitHub requests per hour is used. Try again later."; return }
+        refreshingRepositories.insert(id)
+        defer { refreshingRepositories.remove(id) }
+        do {
+            try change { next in
+                next.githubRequests = recent + [now]
+                next.repositories[index].lastAttempt = now
+                next.repositories[index].nextAllowedRefresh = now.addingTimeInterval(1800)
+            }
+            let result = try await releases(state.repositories[index], now)
+            try change { next in
+                guard let current = next.repositories.firstIndex(where: { $0.id == id }) else { return }
+                if let items = result.releases { next.repositories[current].releases = items }
+                next.repositories[current].etag = result.etag
+                next.repositories[current].lastSuccess = now
+                next.repositories[current].lastError = nil
+                next.repositories[current].nextAllowedRefresh = max(result.retryAfter, now.addingTimeInterval(1800))
+            }
+        } catch {
+            let message = Self.safeError(error)
+            do {
+                try change { next in
+                    if case ConnectorError.retryAt(let date) = error { next.githubBackoffUntil = max(date, next.githubBackoffUntil ?? .distantPast) }
+                    if let current = next.repositories.firstIndex(where: { $0.id == id }) { next.repositories[current].lastError = message }
+                }
+            } catch { notice = "Could not save release status: \(error.localizedDescription)" }
+        }
+    }
+    private static func safeError(_ error: Error) -> String {
+        if let known = error as? ConnectorError { return known.localizedDescription }
+        if error is URLError { return "The network request failed. Check your connection and try again. The last successful reading is preserved." }
+        if error is ValidationError { return error.localizedDescription }
+        return "Refresh failed. The last successful reading is preserved. Check your connection and saved data."
+    }
+}

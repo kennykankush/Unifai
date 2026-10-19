@@ -1,0 +1,99 @@
+[0/1] Planning build
+Building for debugging...
+[0/6] Write sources
+[0/6] /Users/hamulia/dev/unifai/.build/arm64-apple-macosx/debug/UnifaiPackageTests.derived/runner.swift
+[2/8] Write sources
+[3/8] Write swift-version--58304C5D6DBC2206.txt
+[5/11] Emitting module UnifaiCoreTests
+[6/11] Compiling UnifaiCoreTests LedgerTests.swift
+[7/11] Compiling UnifaiCoreTests KeychainTests.swift
+[8/11] Compiling UnifaiCoreTests ConnectorTests.swift
+[9/11] Compiling UnifaiCoreTests StoreTests.swift
+[10/13] Emitting module UnifaiPackageTests
+[11/13] Compiling UnifaiPackageTests runner.swift
+[11/13] Write Objects.LinkFileList
+[12/13] Linking UnifaiPackageTests
+Build complete! (5.34s)
+Test Suite 'All tests' started at 2026-10-19 00:02:42.512.
+Test Suite 'UnifaiPackageTests.xctest' started at 2026-10-19 00:02:42.519.
+Test Suite 'ConnectorTests' started at 2026-10-19 00:02:42.519.
+Test Case '-[UnifaiCoreTests.ConnectorTests testBalanceRequestsUseOnlyExactReadEndpoints]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testBalanceRequestsUseOnlyExactReadEndpoints]' passed (0.010 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testDeepSeekCurrenciesAndPromotionalBalance]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testDeepSeekCurrenciesAndPromotionalBalance]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testDeepSeekRejectsPartialNumericStringsAndDuplicateCurrencies]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testDeepSeekRejectsPartialNumericStringsAndDuplicateCurrencies]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testGitHubBackoffUsesServerReset]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testGitHubBackoffUsesServerReset]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testGitHubUsesBoundedAnonymousConditionalGETAnd304KeepsCache]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testGitHubUsesBoundedAnonymousConditionalGETAnd304KeepsCache]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testHTTPFailuresAreTypedAndNeverIncludeBody]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testHTTPFailuresAreTypedAndNeverIncludeBody]' passed (0.001 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testMissingCredentialAndUnsupportedProviderSendNoRequest]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testMissingCredentialAndUnsupportedProviderSendNoRequest]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testOpenRouterSeparatesCreditAndConsumptionFromCash]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testOpenRouterSeparatesCreditAndConsumptionFromCash]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testOpenRouterZeroNegativeRemainingAndMalformedResponses]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testOpenRouterZeroNegativeRemainingAndMalformedResponses]' passed (0.001 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testPrivateSessionDoesNotDiscoverAmbientCredentialsOrCookies]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testPrivateSessionDoesNotDiscoverAmbientCredentialsOrCookies]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testReleaseDecodingAndSafeLinks]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testReleaseDecodingAndSafeLinks]' passed (0.001 seconds).
+Test Case '-[UnifaiCoreTests.ConnectorTests testRepositoryValidation]' started.
+Test Case '-[UnifaiCoreTests.ConnectorTests testRepositoryValidation]' passed (0.000 seconds).
+Test Suite 'ConnectorTests' passed at 2026-10-19 00:02:42.534.
+	 Executed 12 tests, with 0 failures (0 unexpected) in 0.014 (0.015) seconds
+Test Suite 'KeychainTests' started at 2026-10-19 00:02:42.534.
+Test Case '-[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation]' started.
+/Users/hamulia/dev/unifai/Tests/UnifaiCoreTests/KeychainTests.swift:7: -[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation] : Test skipped - Opt in with UNIFAI_TEST_KEYCHAIN=1. Only creates and removes synthetic items in a unique Unifai test service.
+Test Case '-[UnifaiCoreTests.KeychainTests testSyntheticKeychainRoundTripAndPerAccountIsolation]' skipped (0.001 seconds).
+Test Suite 'KeychainTests' passed at 2026-10-19 00:02:42.534.
+	 Executed 1 test, with 1 test skipped and 0 failures (0 unexpected) in 0.001 (0.001) seconds
+Test Suite 'LedgerTests' started at 2026-10-19 00:02:42.534.
+Test Case '-[UnifaiCoreTests.LedgerTests testInvalidAmountsAndReferences]' started.
+Test Case '-[UnifaiCoreTests.LedgerTests testInvalidAmountsAndReferences]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.LedgerTests testPaymentsDoNotIncludeConsumptionOrSchedulesAndKeepCurrencies]' started.
+Test Case '-[UnifaiCoreTests.LedgerTests testPaymentsDoNotIncludeConsumptionOrSchedulesAndKeepCurrencies]' passed (0.000 seconds).
+Test Suite 'LedgerTests' passed at 2026-10-19 00:02:42.535.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'StoreTests' started at 2026-10-19 00:02:42.535.
+Test Case '-[UnifaiCoreTests.StoreTests testCorruptOrFutureSchemaIsPreservedAndWritesDisabled]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testCorruptOrFutureSchemaIsPreservedAndWritesDisabled]' passed (0.002 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testCredentialReplacementAndAccountDeletionAreScoped]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testCredentialReplacementAndAccountDeletionAreScoped]' passed (0.011 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testCredentialsRejectControlCharactersAndNeverEnterMetadata]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testCredentialsRejectControlCharactersAndNeverEnterMetadata]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testDuplicateBillingOwnerRejectedAndPlannedConnectorRefused]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testDuplicateBillingOwnerRejectedAndPlannedConnectorRefused]' passed (0.004 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testEmptyStartAndIndependentLabelledAccounts]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testEmptyStartAndIndependentLabelledAccounts]' passed (0.004 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testGitHubGlobalBudgetAndBackoffArePersisted]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testGitHubGlobalBudgetAndBackoffArePersisted]' passed (0.010 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testInFlightRefreshCannotDeleteAccountOrStartDuplicate]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testInFlightRefreshCannotDeleteAccountOrStartDuplicate]' passed (0.006 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testMissingCredentialAndRedactedUnexpectedError]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testMissingCredentialAndRedactedUnexpectedError]' passed (0.010 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testPaymentEditDedupRefundAndCoverage]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testPaymentEditDedupRefundAndCoverage]' passed (0.011 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testRefreshFailurePreservesSnapshotAndCooldown]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testRefreshFailurePreservesSnapshotAndCooldown]' passed (0.010 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testRepository304RetainsReleaseAndPrereleaseFilter]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testRepository304RetainsReleaseAndPrereleaseFilter]' passed (0.008 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testRepositoryLimitDuplicatesAndCooldownSurviveRestart]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testRepositoryLimitDuplicatesAndCooldownSurviveRestart]' passed (0.024 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testSaveFailureRollsBackStateAndNewCredential]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testSaveFailureRollsBackStateAndNewCredential]' passed (0.000 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testScaffoldSchemaLoadsAndFilePermissionsArePrivate]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testScaffoldSchemaLoadsAndFilePermissionsArePrivate]' passed (0.003 seconds).
+Test Case '-[UnifaiCoreTests.StoreTests testSchedulesNeverInventPaymentsAndLinkedAccountRemovalIsRefused]' started.
+Test Case '-[UnifaiCoreTests.StoreTests testSchedulesNeverInventPaymentsAndLinkedAccountRemovalIsRefused]' passed (0.008 seconds).
+Test Suite 'StoreTests' passed at 2026-10-19 00:02:42.647.
+	 Executed 15 tests, with 0 failures (0 unexpected) in 0.111 (0.112) seconds
+Test Suite 'UnifaiPackageTests.xctest' passed at 2026-10-19 00:02:42.647.
+	 Executed 30 tests, with 1 test skipped and 0 failures (0 unexpected) in 0.126 (0.128) seconds
+Test Suite 'All tests' passed at 2026-10-19 00:02:42.647.
+	 Executed 30 tests, with 1 test skipped and 0 failures (0 unexpected) in 0.126 (0.135) seconds
+◇ Test run started.
+↳ Testing Library Version: 1085
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

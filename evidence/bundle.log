@@ -1,0 +1,12 @@
+[0/1] Planning build
+Building for debugging...
+[0/4] Write sources
+[1/4] Write swift-version--58304C5D6DBC2206.txt
+[3/6] Compiling Unifai UnifaiApp.swift
+[4/6] Emitting module Unifai
+[4/7] Write Objects.LinkFileList
+[5/7] Linking Unifai
+[6/7] Applying Unifai
+Build complete! (1.22s)
+/Users/hamulia/dev/unifai/.build/Unifai.app: replacing existing signature
+Built /Users/hamulia/dev/unifai/.build/Unifai.app

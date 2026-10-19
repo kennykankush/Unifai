@@ -1,0 +1,54 @@
+# First local milestone
+
+Status: functioning native milestone verified on 2026-10-19. Live authentication against Hadi’s provider accounts remains a setup step. The current development owner continued the existing scaffold through Herdr and the requested `gptgpt` launcher. The old built-in agent remains stopped; no additional agents were used.
+
+## Implemented behavior
+
+Unifai has a SwiftUI main window and an AppKit menu bar status item hosting a SwiftUI companion. The companion and window observe the same store. The app supports keyboard-accessible native commands, window reopening, scrollable compact layouts, and native forms with inline errors.
+
+The searchable catalogue distinguishes ready, manual and planned capabilities. OpenRouter and DeepSeek support multiple labelled billing accounts, per-account Keychain credentials and manual balance refreshes. Planned financial entries can create manual accounts without claiming that an API connector exists. Planned news entries expose no connection action.
+
+Payments and refunds form a currency-preserving ledger. Recurring schedules remain expected charges and never generate historical payments. History has a coverage start and a user-confirmed completeness state. Snapshots retain their source, observation time, coverage explanation and error state. Failed refreshes preserve the last successful reading. Duplicate billing-owner checks reduce accidental duplicate balances; financial balances are never aggregated across account identities.
+
+Public GitHub release watching uses an anonymous ephemeral session, a bounded page of 50 releases, ETag caching, prerelease filtering and original source links. A persisted 30-minute per-repository cooldown, 10-repository cap, 20-request hourly budget and shared server backoff bound refreshes. Concurrent rate-limit responses preserve the longest backoff.
+
+## Code ownership and persistence
+
+| Area | Location |
+| --- | --- |
+| Models, ledger and history coverage | `Sources/UnifaiCore/Models.swift` |
+| Catalogue and capability descriptions | `Sources/UnifaiCore/Catalogue.swift` |
+| HTTP clients, parsing, redirection refusal | `Sources/UnifaiCore/Connectors.swift` |
+| Atomic JSON persistence | `Sources/UnifaiCore/Persistence.swift` |
+| Scoped Keychain access | `Sources/UnifaiCore/Credentials.swift` |
+| Save-before-publish mutations and refresh coordination | `Sources/UnifaiCore/AppStore.swift` |
+| Read-only agent views of saved state | `Sources/UnifaiCore/AgentReport.swift` |
+| MCP stdio server (`unifai-mcp`) | `Sources/UnifaiMCP/main.swift` |
+| Design system, provider logos and charts | `Sources/Unifai/Design.swift`, `Sources/Unifai/Resources/Logos/` |
+| Window, forms and companion | `Sources/Unifai/` |
+| Accounting, connectors, persistence, concurrency and integration checks | `Tests/UnifaiCoreTests/` |
+
+The Swift Package remains dependency-free and targets macOS 14+. It builds using Swift 6.2 with the scaffold’s Swift 5 language mode. Compiler caches, local bundles and test data stay inside the checkout. Normal runtime data uses the app’s Application Support directory; synthetic UI data uses `.qa/fixture-workspace`.
+
+Schema 1 remains readable, including scaffold files without the new optional fields. Corrupt or future-schema data blocks writes and remains untouched. Credentials never enter JSON. New-account failures attempt credential rollback, and linked financial records prevent account removal.
+
+## Verification achieved
+
+- Debug app bundles and optimized executable build passed on Apple silicon, macOS 26.5, Xcode 26.0.1
+- 32 tests passed with both explicit integration checks enabled, including synthetic Keychain isolation and one anonymous public GitHub request
+- The native app’s synthetic Keychain check passed create, read, replacement, isolation and deletion
+- Native UI checks covered empty startup, catalogue search, multi-account creation, provider fixture refreshes, permission errors retaining balances, payment validation and saving, subscription saving, release following, prerelease filtering and cooldown feedback
+- Relaunch retained the synthetic account metadata, payment totals, schedules, snapshots, error state, followed repositories and release cache
+- Standard and minimum window layouts were inspected, including the native payment form and Escape dismissal
+- The menu bar companion opened as a native popover and its Open Unifai action returned to the main window
+- The original `VISION.md` SHA-256 still matches, preserving all raw quotes
+
+Commands, observed values and retained logs are indexed in [evidence/VERIFICATION.md](evidence/VERIFICATION.md). An earlier sandboxed Keychain run failed with OSStatus `-50`; the same synthetic check passed after the authorized Full Access launcher change. That failure remains in the historical log and is not the final result.
+
+## Remaining qualification and deferred work
+
+Authenticated OpenRouter and DeepSeek responses have not been witnessed against Hadi’s accounts. Their supported fields and failures were exercised with fixtures; real keys must be entered through the app. The anonymous public GitHub client was exercised live once. No paid API request, purchase, plan change or signing-account enrollment occurred. The repository was published to GitHub on 2026-10-19 at the owner's request.
+
+The app has a local ad-hoc signature and no distribution qualification. macOS 14 runtime compatibility, light appearance and VoiceOver operation remain unverified. The persisted store assumes one process per data directory and has no automatic backup or sync.
+
+WidgetKit remains the intended follow-on surface. Quotas and reset windows, Claude and OpenAI reporting, invoice imports, public feeds, richer discovery and notifications remain deferred. X remains disabled. This milestone keeps the broader hub visible without claiming those integrations work.
