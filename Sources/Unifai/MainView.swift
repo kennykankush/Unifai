@@ -26,9 +26,10 @@ enum Destination: String, CaseIterable, Identifiable {
 }
 
 enum Editor: Identifiable {
-    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage, settings
+    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage, settings, wallet(UUID)
     var id: String {
         switch self {
+        case .wallet(let id): return "wallet-\(id)"
         case .account(let integration, let account): return "account-\(integration.id)-\(account?.id.uuidString ?? "new")"
         case .payment(let record): return "payment-\(record?.id.uuidString ?? "new")"
         case .subscription(let record): return "subscription-\(record?.id.uuidString ?? "new")"
@@ -115,6 +116,7 @@ struct MainView: View {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
             AppRuntime.openSettings = { editor = .settings }
             AppRuntime.navigate = { destination = $0 }
+            if let wallet = AppRuntime.initialWallet { AppRuntime.initialWallet = nil; editor = .wallet(wallet) }
             AppRuntime.scheduleTestClick()
         }
         .sheet(item: $editor) { item in
@@ -125,6 +127,7 @@ struct MainView: View {
             case .repository: RepositoryEditor()
             case .coverage: CoverageEditor()
             case .settings: SettingsEditor()
+            case .wallet(let id): WalletDetail(accountID: id)
             }
         }
         .alert("Unifai", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
@@ -487,7 +490,7 @@ struct MainView: View {
                             ForEach(store.state.accounts.filter { matches($0.label, integrationName($0)) }) { account in
                                 WalletCard(account: account, paid: paidTotals(for: account))
                                     .frame(width: 290)
-                                    .onTapGesture { destination = .accounts }
+                                    .onTapGesture { editor = .wallet(account.id) }
                                     .contextMenu { walletMenuItems(account) }
                             }
                             addWalletCard
@@ -507,54 +510,79 @@ struct MainView: View {
         }
     }
 
+    /// Pay-as-you-go usage building up this month (Azure and similar), in one currency where it can be converted.
+    private func accruing(in currency: String) -> Decimal {
+        store.state.accruingThisMonth().compactMap { item -> Decimal? in
+            if item.amount.currency == currency { return item.amount.amount }
+            return combining ? store.rates?.convert(item.amount, to: currency, on: .now)?.amount : nil
+        }.reduce(0, +)
+    }
+
     private var heroCard: some View {
+        Billboard(faces: billboardFaces) { currencyControl(onColor: true) }
+    }
+
+    private var billboardFaces: [BoardFace] {
         let currency = activeCurrency
-        let total = Ledger.paidTotals(spendPayments).first { $0.currency == currency }
-        let month = SpendSeries.paidThisMonth(spendPayments, currency: currency)
+        let calendar = Calendar.current
+        let pending = accruing(in: currency)
+        let paid = Ledger.paidTotals(spendPayments).first { $0.currency == currency }?.amount ?? 0
+        let total: Money? = paid + pending > 0 ? Money((paid + pending).rounded2, currency) : nil
+        let month = store.state.monthToDateSpend(in: currency, rates: combining ? store.rates : nil, includeAccruing: true).spent
         let points = SpendSeries.cumulative(spendPayments, currency: currency, start: store.state.coverageStart)
-        return ZStack(alignment: .topLeading) {
-            MeshBackdrop(colors: Palette.hero)
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    HStack(spacing: 7) {
-                        Image(systemName: "creditcard.fill").font(.system(size: 12, weight: .bold))
-                        Text("Total paid for AI").font(.system(size: 14, weight: .semibold))
-                    }
-                    .opacity(0.9)
-                    Spacer()
-                    currencyControl(onColor: true)
-                }
-                Spacer(minLength: 10)
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let total { MoneyText(money: total, size: 46, weight: .heavy) }
-                        else { Text("Nothing yet").font(.system(size: 38, weight: .heavy)).tracking(-1) }
-                        HStack(spacing: 8) {
-                            if month > 0 {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .heavy))
-                                    Text("\(Money(Decimal(month), currency).amountText) this month").font(.system(size: 12, weight: .bold)).monospacedDigit()
-                                }
-                                .foregroundStyle(Palette.hex(0x15161B))
-                                .padding(.horizontal, 9).frame(height: 24)
-                                .background(Capsule().fill(Palette.lime))
-                            }
-                            Text(conversionCaption ?? store.state.coverageDescription).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(2)
-                        }
-                        heroThisMonth
-                    }
-                    Spacer(minLength: 16)
-                    if points.count > 2 { Sparkline(points: points).frame(width: 200, height: 84) }
-                }
-            }
-            .padding(24)
+
+        // Six months of spend for the month face, this month including pay-as-you-go usage so far.
+        let thisMonthStart = calendar.dateInterval(of: .month, for: .now)?.start ?? .now
+        let starts = (0..<6).reversed().compactMap { calendar.date(byAdding: .month, value: -$0, to: thisMonthStart) }
+        let months = starts.map { start -> Double in
+            let end = calendar.date(byAdding: .month, value: 1, to: start) ?? .now
+            let sum = spendPayments.filter { $0.money.currency == currency && $0.paidAt >= start && $0.paidAt < end }
+                .reduce(Decimal(0)) { $0 + ($1.kind == .refund ? -$1.money.amount : $1.money.amount) }
+            return max(0, NSDecimalNumber(decimal: start == thisMonthStart ? month.amount : sum).doubleValue)
         }
-        .foregroundStyle(.white)
-        .frame(height: 232)
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Color.white.opacity(0.14)))
-        .shadow(color: Palette.hero[1].opacity(0.35), radius: 24, y: 12)
+        let lastMonth = months.count >= 2 ? months[months.count - 2] : 0
+        let thisMonth = NSDecimalNumber(decimal: month.amount).doubleValue
+        let lastName = starts.count >= 2 ? starts[starts.count - 2].formatted(.dateTime.month(.wide)) : "last month"
+        let comparison: String = {
+            guard thisMonth > 0 else { return "Nothing recorded in \(Date.now.formatted(.dateTime.month(.wide))) yet" }
+            guard lastMonth > 0 else { return "Payments plus pay-as-you-go usage so far" }
+            let change = Int(((thisMonth - lastMonth) / lastMonth * 100).rounded())
+            return change >= 0 ? "\(change)% more than \(lastName) so far" : "\(-change)% less than \(lastName) so far"
+        }()
+
+        // Prepaid credit across live wallets, converted where a reference rate exists.
+        let wallets = store.state.accounts.filter { $0.mode == .live }.compactMap { account -> (ConnectedAccount, Money)? in
+            guard let balance = account.snapshot?.balances.first(where: { $0.currency != "CREDITS" && $0.currency != "UNLIMITED" }) else { return nil }
+            return (account, balance)
+        }
+        var credit: Decimal = 0, counted: [(ConnectedAccount, Money)] = []
+        for (account, balance) in wallets {
+            if let money = balance.currency == currency ? balance : store.rates?.convert(balance, to: currency, on: .now) {
+                credit += money.amount; counted.append((account, balance))
+            }
+        }
+        let lowest = counted.min { a, b in
+            let x = a.1.currency == currency ? a.1.amount : store.rates?.convert(a.1, to: currency, on: .now)?.amount ?? a.1.amount
+            let y = b.1.currency == currency ? b.1.amount : store.rates?.convert(b.1, to: currency, on: .now)?.amount ?? b.1.amount
+            return x < y
+        }
+        let creditCaption = counted.isEmpty ? "Connect OpenRouter, DeepSeek or another prepaid wallet"
+            : "Across \(counted.count) wallet\(counted.count == 1 ? "" : "s")" + (lowest.map { " · lowest: \(integrationName($0.0)) \($0.1.plainText)" } ?? "")
+
+        return [
+            BoardFace(id: "total", title: "Total spent on AI", symbol: "creditcard.fill", value: total, empty: "Nothing yet", colors: Palette.hero,
+                      caption: pending > 0 ? "Includes \(Money(pending.rounded2, currency).plainText) of pay-as-you-go usage this month" : (conversionCaption ?? store.state.coverageDescription),
+                      chip: month.amount > 0 ? "+\(month.amountText) this month" : nil,
+                      visual: points.count > 2 ? AnyView(Sparkline(points: points).frame(width: 200, height: 84)) : nil,
+                      footer: AnyView(heroThisMonth)),
+            BoardFace(id: "month", title: "Spent in \(Date.now.formatted(.dateTime.month(.wide)))", symbol: "calendar", value: month.amount > 0 ? month : nil, empty: "Nothing yet",
+                      colors: [Palette.hex(0x0E4A3C), Palette.hex(0x14805F), Palette.hex(0x9DBF2A)], caption: comparison,
+                      visual: AnyView(MiniMonthBars(values: months, labels: starts.map { $0.formatted(.dateTime.month(.narrow)) })),
+                      footer: AnyView(heroThisMonth)),
+            BoardFace(id: "credit", title: "Credit remaining", symbol: "wallet.pass.fill", value: credit > 0 ? Money(credit.rounded2, currency) : nil, empty: "No prepaid credit",
+                      colors: [Palette.hex(0x1A2F9E), Palette.hex(0x3D5BFF), Palette.hex(0x3FC1FF)], caption: creditCaption,
+                      visual: counted.isEmpty ? nil : AnyView(LogoStack(ids: counted.map(\.0.integrationID), size: 40).padding(.bottom, 6))),
+        ]
     }
 
     /// This month at a glance: pay-as-you-go usage still building up, and progress against the budget.
@@ -720,6 +748,7 @@ struct MainView: View {
     @ViewBuilder private func walletMenuItems(_ account: ConnectedAccount) -> some View {
         if account.mode == .live { Button("Refresh Balance") { Task { await store.refreshAccount(account.id) } } }
         if SignIn.supports(account.integrationID) { Button(SignIn.title(account.integrationID)) { signIn(account) } }
+        Button("Show Details") { editor = .wallet(account.id) }
         Button("Edit Account") { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } }
         if account.mode == .live { Button("Switch to Manual Records") { perform { try store.switchToManual(account.id) } } }
         Button("Add Payment") { editor = .payment(.init(accountID: account.id, description: "", kind: .topUp, money: Money(0, "USD"), paidAt: .now)) }
@@ -880,6 +909,8 @@ struct MainView: View {
     private func walletTile(_ account: ConnectedAccount) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             WalletCard(account: account, paid: paidTotals(for: account), height: 190)
+                .onTapGesture { editor = .wallet(account.id) }
+                .help("Show details")
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     if account.mode == .live {
@@ -1003,6 +1034,12 @@ struct MainView: View {
                         ForEach(totals) { MoneyText(money: $0, size: 14, weight: .semibold).foregroundStyle(.secondary) }
                     } else {
                         ForEach(totals) { MoneyText(money: $0, size: 26, weight: .heavy) }
+                    }
+                    let pending = accruing(in: currency)
+                    if pending > 0 {
+                        Label("+ \(Money(pending.rounded2, currency).plainText) accruing this month", systemImage: "hourglass")
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                            .help("Pay-as-you-go usage so far this month (Azure and similar), recorded as a payment when the month closes")
                     }
                     Spacer(minLength: 0)
                     Chip(text: store.state.historyCoverage?.completeForPeriod == true ? "Complete for period" : "Partial history",

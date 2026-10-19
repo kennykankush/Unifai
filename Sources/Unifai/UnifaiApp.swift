@@ -55,6 +55,14 @@ struct UnifaiApp: App {
         if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--destination"), args.indices.contains(index + 1) {
             AppRuntime.initialDestination = args[index + 1] == "Releases" ? .timeline : Destination(rawValue: args[index + 1])
         }
+        // Visual checks: open the detail view of the first wallet of a service.
+        if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--test-wallet"), args.indices.contains(index + 1) {
+            AppRuntime.initialWallet = model.state.accounts.first { $0.integrationID == args[index + 1] }?.id
+        }
+        // Visual checks: show a given billboard face first.
+        if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--test-board"), args.indices.contains(index + 1) {
+            AppRuntime.initialBoard = Int(args[index + 1])
+        }
         // Visual checks: open the first page scrolled to a fraction of its height.
         if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--test-scroll"), args.indices.contains(index + 1), let fraction = Double(args[index + 1]) {
             AppRuntime.initialScroll = UnitPoint(x: 0, y: min(1, max(0, fraction)))
@@ -96,6 +104,8 @@ struct MainWindowCommands: Commands {
     static var channel = "release"
     static var initialDestination: Destination?
     static var initialScroll: UnitPoint?
+    static var initialWallet: UUID?
+    static var initialBoard: Int?
 
     /// Development and demo builds only: `--test-click x,y` sends a click to the main window at a
     /// point measured from its top-left corner, through normal AppKit hit-testing, without moving

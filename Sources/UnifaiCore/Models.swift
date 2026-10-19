@@ -85,6 +85,102 @@ public struct CostAnomaly: Codable, Hashable {
     }
 }
 
+/// One line of a cost breakdown: a service, or a meter within a resource.
+public struct CostLine: Codable, Hashable {
+    public var name: String
+    public var cost: Money
+    public init(name: String, cost: Money) { self.name = name; self.cost = cost }
+}
+
+/// A model deployed on a Foundry (Azure AI Services / Azure OpenAI) account.
+public struct ModelDeployment: Codable, Hashable {
+    public var name: String
+    public var model: String
+    public var version: String?
+    public var sku: String?
+    public var capacity: Int?
+    public init(name: String, model: String, version: String?, sku: String?, capacity: Int?) {
+        self.name = name; self.model = model; self.version = version; self.sku = sku; self.capacity = capacity
+    }
+}
+
+/// A billed cloud resource with this month's cost, for the wallet detail view.
+public struct CloudResource: Codable, Hashable, Identifiable {
+    /// Azure resource ID, lowercased.
+    public var id: String
+    public var name: String
+    /// Azure resource type, lowercased, such as microsoft.compute/virtualmachines.
+    public var type: String
+    public var group: String
+    public var location: String?
+    public var cost: Money?
+    /// The meters that make up the cost, largest first.
+    public var meters: [CostLine]
+    /// Virtual machines: Running, Deallocated or Stopped. "Deleted" when only the bill remembers it.
+    public var state: String?
+    /// VM size or SKU.
+    public var size: String?
+    public var models: [ModelDeployment]?
+    public init(id: String, name: String, type: String, group: String, location: String?, cost: Money?, meters: [CostLine],
+                state: String? = nil, size: String? = nil, models: [ModelDeployment]? = nil) {
+        self.id = id; self.name = name; self.type = type; self.group = group; self.location = location; self.cost = cost
+        self.meters = meters; self.state = state; self.size = size; self.models = models
+    }
+
+    /// Plain name for the resource type.
+    public var kind: String {
+        switch type {
+        case "microsoft.compute/virtualmachines": return "Virtual machine"
+        case "microsoft.compute/disks": return "Disk"
+        case "microsoft.compute/snapshots": return "Disk snapshot"
+        case "microsoft.network/publicipaddresses": return "Public IP"
+        case "microsoft.network/networkinterfaces": return "Network interface"
+        case "microsoft.network/virtualnetworks": return "Virtual network"
+        case "microsoft.network/networksecuritygroups": return "Network security group"
+        case "microsoft.network/bastionhosts": return "Bastion"
+        case "microsoft.storage/storageaccounts": return "Storage account"
+        case "microsoft.cognitiveservices/accounts": return "Foundry account"
+        case "microsoft.machinelearningservices/workspaces": return "Foundry project"
+        case "microsoft.search/searchservices": return "AI Search"
+        case "microsoft.web/sites": return "App Service"
+        case "microsoft.web/serverfarms": return "App Service plan"
+        case "microsoft.containerinstance/containergroups": return "Container instance"
+        case "microsoft.containerregistry/registries": return "Container registry"
+        case "microsoft.app/containerapps": return "Container app"
+        case "microsoft.keyvault/vaults": return "Key Vault"
+        case "microsoft.documentdb/databaseaccounts": return "Cosmos DB"
+        case "microsoft.sql/servers/databases": return "SQL database"
+        default:
+            let last = type.split(separator: "/").last.map(String.init) ?? type
+            return last.prefix(1).uppercased() + last.dropFirst()
+        }
+    }
+
+    /// Which part of the detail view the resource belongs to.
+    public var family: String {
+        switch type {
+        case "microsoft.compute/virtualmachines", "microsoft.compute/disks", "microsoft.compute/snapshots",
+             "microsoft.containerinstance/containergroups", "microsoft.app/containerapps", "microsoft.web/sites", "microsoft.web/serverfarms":
+            return "Compute"
+        case "microsoft.cognitiveservices/accounts", "microsoft.machinelearningservices/workspaces", "microsoft.search/searchservices":
+            return "AI"
+        case "microsoft.storage/storageaccounts", "microsoft.documentdb/databaseaccounts", "microsoft.sql/servers/databases", "microsoft.containerregistry/registries":
+            return "Storage & data"
+        default:
+            return type.hasPrefix("microsoft.network/") ? "Networking" : "Other"
+        }
+    }
+
+    public var portalURL: URL? { URL(string: "https://portal.azure.com/#resource\(id)") }
+}
+
+/// Total cost of one day, yyyy-MM-dd.
+public struct DailyCost: Codable, Hashable {
+    public var day: String
+    public var amount: Decimal
+    public init(day: String, amount: Decimal) { self.day = day; self.amount = amount }
+}
+
 /// Tokens used on one day, as reported by the provider.
 public struct UsageDay: Codable, Hashable {
     public var date: String
@@ -131,6 +227,10 @@ public struct BalanceSnapshot: Codable, Hashable {
     public var lifetimeTokens: Int64?
     /// Notable changes spotted in this reading, such as a service's daily cost jumping.
     public var anomalies: [CostAnomaly]?
+    /// Cloud wallets: every service this month, every billed resource, and daily totals.
+    public var services: [CostLine]?
+    public var resources: [CloudResource]?
+    public var dailyCosts: [DailyCost]?
     public init(balances: [Money], details: [BalanceDetail] = [], reportedConsumption: [Money] = [], observedAt: Date = .now, source: URL, coverage: String,
                 plan: String? = nil, allowances: [AllowanceWindow]? = nil, limitReached: Bool? = nil, consumptionPeriod: String? = nil,
                 resetCredits: [ResetCredit]? = nil, usageDays: [UsageDay]? = nil, lifetimeTokens: Int64? = nil, anomalies: [CostAnomaly]? = nil) {

@@ -144,7 +144,28 @@ enum FixtureWorkspace {
                 rows.append("[0.04,\(day),\"Storage\",\"USD\"]")
             }
             let body = #"{"properties":{"columns":[{"name":"Cost"},{"name":"UsageDate"},{"name":"ServiceName"},{"name":"Currency"}],"rows":["# + rows.joined(separator: ",") + "]}}"
-            return try AzureCostClient.decode([("Synthetic subscription", Data(body.utf8))], now: now)
+            var snapshot = try AzureCostClient.decode([("Synthetic subscription", Data(body.utf8))], now: now)
+            let base = "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups"
+            func usd(_ value: String) -> Money { Money(Decimal(string: value)!, "USD") }
+            snapshot.resources = [
+                CloudResource(id: "\(base)/ml-lab/providers/microsoft.compute/virtualmachines/gpu-train-01", name: "gpu-train-01", type: "microsoft.compute/virtualmachines",
+                              group: "ml-lab", location: "eastus", cost: usd("9.64"), meters: [CostLine(name: "NC6s v3 (Linux)", cost: usd("8.44")), CostLine(name: "P30 LRS Disk", cost: usd("1.20"))],
+                              state: "Running", size: "Standard_NC6s_v3"),
+                CloudResource(id: "\(base)/hadi-ai/providers/microsoft.cognitiveservices/accounts/hadi-foundry", name: "hadi-foundry", type: "microsoft.cognitiveservices/accounts",
+                              group: "hadi-ai", location: "eastus2", cost: usd("7.11"),
+                              meters: [CostLine(name: "gpt-4.1-mini Inp glbl Tokens", cost: usd("3.20")), CostLine(name: "gpt-4.1-mini Outp glbl Tokens", cost: usd("2.90")), CostLine(name: "o4-mini Inp glbl Tokens", cost: usd("1.01"))],
+                              size: "S0", models: [ModelDeployment(name: "gpt-4.1-mini", model: "gpt-4.1-mini", version: "2025-04-14", sku: "GlobalStandard", capacity: 50),
+                                                   ModelDeployment(name: "o4-mini", model: "o4-mini", version: "2025-04-16", sku: "GlobalStandard", capacity: 20)]),
+                CloudResource(id: "\(base)/hadi-ai/providers/microsoft.storage/storageaccounts/hadilabstore", name: "hadilabstore", type: "microsoft.storage/storageaccounts",
+                              group: "hadi-ai", location: "eastus2", cost: usd("1.05"), meters: [CostLine(name: "Hot LRS Data Stored", cost: usd("0.81")), CostLine(name: "Read Operations", cost: usd("0.24"))], size: "Standard_LRS"),
+                CloudResource(id: "\(base)/ml-lab/providers/microsoft.network/publicipaddresses/gpu-train-01-ip", name: "gpu-train-01-ip", type: "microsoft.network/publicipaddresses",
+                              group: "ml-lab", location: "eastus", cost: usd("0.63"), meters: [CostLine(name: "Standard IPv4 Static Public IP", cost: usd("0.63"))]),
+                CloudResource(id: "\(base)/dev/providers/microsoft.compute/virtualmachines/old-sandbox", name: "old-sandbox", type: "microsoft.compute/virtualmachines",
+                              group: "dev", location: nil, cost: usd("0.40"), meters: [CostLine(name: "D2s v5", cost: usd("0.40"))], state: "Deleted"),
+                CloudResource(id: "\(base)/dev/providers/microsoft.compute/virtualmachines/dev-box", name: "dev-box", type: "microsoft.compute/virtualmachines",
+                              group: "dev", location: "southeastasia", cost: usd("0.28"), meters: [CostLine(name: "P10 LRS Disk", cost: usd("0.28"))], state: "Deallocated", size: "Standard_D4s_v5"),
+            ]
+            return snapshot
         }
         if integration == "claude-subscription" {
             return try ClaudeCodeClient.decode(Data(#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}"#.utf8), now: now)

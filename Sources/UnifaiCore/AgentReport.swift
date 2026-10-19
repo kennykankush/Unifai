@@ -87,6 +87,8 @@ public enum AgentReport {
         public var paidTotalConverted: Amount?
         public var conversionNote: String?
         public var paymentCoverage: String
+        /// Money paid plus this month's pay-as-you-go usage, per currency: what AI has cost so far.
+        public var totalSpentIncludingAccruing: [Amount]
         /// Pay-as-you-go usage building up this month (Azure and similar), not yet invoiced.
         public var accruingThisMonth: [Accrual]
         public var budget: Budget?
@@ -310,6 +312,11 @@ public enum AgentReport {
             paidTotalConverted: converted.0,
             conversionNote: converted.1,
             paymentCoverage: state.coverageDescription,
+            totalSpentIncludingAccruing: {
+                var totals = Dictionary(Ledger.paidTotals(state.payments).map { ($0.currency, $0.amount) }, uniquingKeysWith: +)
+                for item in state.accruingThisMonth(now: now) { totals[item.amount.currency, default: 0] += item.amount.amount }
+                return totals.keys.sorted().map { Amount(Money(totals[$0]!.rounded2, $0)) }
+            }(),
             accruingThisMonth: state.accruingThisMonth(now: now).map {
                 Accrual(provider: Catalogue.integration($0.account.integrationID)?.name ?? $0.account.integrationID, label: $0.account.label, amount: Amount($0.amount))
             },

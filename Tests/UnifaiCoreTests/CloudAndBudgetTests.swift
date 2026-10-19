@@ -98,3 +98,39 @@ extension CloudAndBudgetTests {
         XCTAssertNil(try vault.read(accountID: id))
     }
 }
+
+extension CloudAndBudgetTests {
+    func testAzureResourcesJoinCostsInventoryStatesAndModels() {
+        let sub = "/subscriptions/s1/resourceGroups/ML-Lab/providers/Microsoft.Compute/virtualMachines/gpu-01"
+        let foundry = "/subscriptions/s1/resourceGroups/ai/providers/Microsoft.CognitiveServices/accounts/hadi-foundry"
+        let gone = "/subscriptions/s1/resourcegroups/dev/providers/microsoft.compute/virtualmachines/old-box"
+        var extras = AzureCostClient.Extras()
+        extras.resourceCosts = [Data("""
+        {"properties":{"columns":[{"name":"Cost"},{"name":"ResourceId"},{"name":"Meter"},{"name":"Currency"}],"rows":[
+         [8.44,"\(sub.lowercased())","NC6s v3","USD"],[1.2,"\(sub.lowercased())","P30 LRS Disk","USD"],
+         [3.2,"\(foundry.lowercased())","gpt-4.1-mini Inp glbl Tokens","USD"],[0.4,"\(gone)","D2s v5","USD"]]}}
+        """.utf8)]
+        extras.resources = [Data("""
+        [{"id":"\(sub)","name":"gpu-01","type":"Microsoft.Compute/virtualMachines","location":"eastus","resourceGroup":"ML-Lab","sku":null},
+         {"id":"\(foundry)","name":"hadi-foundry","type":"Microsoft.CognitiveServices/accounts","location":"eastus2","resourceGroup":"ai","sku":"S0"},
+         {"id":"/subscriptions/s1/resourceGroups/dev/providers/Microsoft.Compute/virtualMachines/dev-box","name":"dev-box","type":"Microsoft.Compute/virtualMachines","location":"southeastasia","resourceGroup":"dev","sku":null}]
+        """.utf8)]
+        extras.resourceListRead = true
+        extras.machines = [Data(#"[{"id":"\#(sub)","power":"VM running","size":"Standard_NC6s_v3"},{"id":"/subscriptions/s1/resourceGroups/dev/providers/Microsoft.Compute/virtualMachines/dev-box","power":"VM deallocated","size":"Standard_D4s_v5"}]"#.utf8)]
+        extras.deployments = [foundry.lowercased(): Data(#"[{"name":"gpt-4.1-mini","model":"gpt-4.1-mini","version":"2025-04-14","sku":"GlobalStandard","capacity":50}]"#.utf8)]
+
+        let resources = AzureCostClient.resources(extras, currency: "USD")
+        XCTAssertEqual(resources.map(\.name), ["gpu-01", "hadi-foundry", "old-box", "dev-box"], "Costliest first; resources without cost last")
+        XCTAssertEqual(resources[0].cost, Money(Decimal(string: "9.64")!, "USD"))
+        XCTAssertEqual(resources[0].state, "Running")
+        XCTAssertEqual(resources[0].size, "Standard_NC6s_v3")
+        XCTAssertEqual(resources[0].meters.first?.name, "NC6s v3")
+        XCTAssertEqual(resources[0].kind, "Virtual machine")
+        XCTAssertEqual(resources[1].models?.first?.capacity, 50)
+        XCTAssertEqual(resources[1].family, "AI")
+        XCTAssertEqual(resources[2].state, "Deleted", "Billed this month but no longer listed")
+        XCTAssertEqual(resources[2].type, "microsoft.compute/virtualmachines")
+        XCTAssertEqual(resources[3].state, "Deallocated")
+        XCTAssertNil(resources[3].cost)
+    }
+}

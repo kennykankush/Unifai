@@ -520,36 +520,156 @@ public struct AzureCostClient {
 
     struct Subscription: Decodable { let id: String; let name: String }
 
+    /// Optional detail beyond the totals: per-resource costs, the resource list, VM power states and
+    /// Foundry model deployments. Any of these can fail (permissions, throttling) without failing the wallet.
+    struct Extras {
+        var resourceCosts: [Data] = []
+        var resources: [Data] = []
+        var machines: [Data] = []
+        var deployments: [String: Data] = [:]
+        var resourceListRead = false
+    }
+
     public func fetch(now: Date = .now) async throws -> BalanceSnapshot {
         guard let az = Self.locate() else { throw ValidationError.message("The Azure CLI is not installed. Install it with brew install azure-cli, run az login, then refresh.") }
-        let results = try await Task.detached { () throws -> [(String, Data)] in
+        let (results, extras) = try await Task.detached { () throws -> ([(String, Data)], Extras) in
             let list = try LocalTool.run(az, ["account", "list", "--query", "[?state=='Enabled'].{id:id,name:name}", "-o", "json", "--only-show-errors"], timeout: 60)
             guard list.status == 0 else { throw Self.cliError(list.error) }
             let subscriptions = (try? JSONDecoder().decode([Subscription].self, from: list.output)) ?? []
             guard !subscriptions.isEmpty else { throw ValidationError.message("No enabled Azure subscriptions. Run az login with the account that owns them, then refresh.") }
+            var extras = Extras()
             // One daily query covers both this month's total and the spike check, since Cost Management
             // allows only a few queries per minute per scope.
-            let body = Self.dailyQuery(now: now)
-            return try subscriptions.prefix(10).flatMap { subscription -> [(String, Data)] in
-                var url: String? = "https://management.azure.com/subscriptions/\(subscription.id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                var pages: [(String, Data)] = []
-                while let next = url, pages.count < 4 {
-                    let arguments = ["rest", "--method", "post", "--url", next, "--body", body, "--only-show-errors"]
-                    var result = try LocalTool.run(az, arguments, timeout: 90)
-                    // Wait once and retry when throttled.
-                    if result.status != 0, result.error.contains("429") {
-                        Thread.sleep(forTimeInterval: 12)
-                        result = try LocalTool.run(az, arguments, timeout: 90)
-                    }
-                    guard result.status == 0 else { throw Self.cliError(result.error) }
-                    pages.append((subscription.name, result.output))
-                    url = (try? JSONDecoder().decode(QueryResult.self, from: result.output))?.properties.nextLink
-                        .flatMap { URL(string: $0)?.host == "management.azure.com" ? $0 : nil }
-                }
+            let results = try subscriptions.prefix(10).flatMap { subscription -> [(String, Data)] in
+                let pages = try Self.query(az, subscription: subscription.id, body: Self.dailyQuery(now: now), required: true).map { (subscription.name, $0) }
+                Thread.sleep(forTimeInterval: 1.5)
+                extras.resourceCosts += (try? Self.query(az, subscription: subscription.id, body: Self.resourceQuery, required: false)) ?? []
+                Self.inventory(az, subscription: subscription.id, into: &extras)
                 return pages
             }
+            return (results, extras)
         }.value
-        return try Self.decode(results, now: now)
+        var snapshot = try Self.decode(results, now: now)
+        snapshot.resources = Self.resources(extras, currency: snapshot.reportedConsumption.max { $0.amount < $1.amount }?.currency ?? "USD")
+        if snapshot.resources?.isEmpty == true { snapshot.resources = nil }
+        return snapshot
+    }
+
+    /// Runs one Cost Management query, following up to four pages, retrying once when throttled.
+    static func query(_ az: URL, subscription: String, body: String, required: Bool) throws -> [Data] {
+        var url: String? = "https://management.azure.com/subscriptions/\(subscription)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+        var pages: [Data] = []
+        while let next = url, pages.count < 4 {
+            let arguments = ["rest", "--method", "post", "--url", next, "--body", body, "--only-show-errors"]
+            var result = try LocalTool.run(az, arguments, timeout: 90)
+            if result.status != 0, result.error.contains("429") {
+                Thread.sleep(forTimeInterval: 12)
+                result = try LocalTool.run(az, arguments, timeout: 90)
+            }
+            guard result.status == 0 else { throw Self.cliError(result.error) }
+            pages.append(result.output)
+            url = (try? JSONDecoder().decode(QueryResult.self, from: result.output))?.properties.nextLink
+                .flatMap { URL(string: $0)?.host == "management.azure.com" ? $0 : nil }
+        }
+        return pages
+    }
+
+    /// Resources, VM power states and Foundry deployments, read with ordinary ARM list calls.
+    static func inventory(_ az: URL, subscription: String, into extras: inout Extras) {
+        let listQuery = "[].{id:id,name:name,type:type,location:location,resourceGroup:resourceGroup,sku:sku.name}"
+        guard let list = try? LocalTool.run(az, ["resource", "list", "--subscription", subscription, "--query", listQuery, "-o", "json", "--only-show-errors"], timeout: 90),
+              list.status == 0 else { return }
+        extras.resources.append(list.output)
+        extras.resourceListRead = true
+        let items = (try? JSONDecoder().decode([ListedResource].self, from: list.output)) ?? []
+        if items.contains(where: { $0.type.lowercased() == "microsoft.compute/virtualmachines" }),
+           let machines = try? LocalTool.run(az, ["vm", "list", "-d", "--subscription", subscription, "--query", "[].{id:id,power:powerState,size:hardwareProfile.vmSize}", "-o", "json", "--only-show-errors"], timeout: 120),
+           machines.status == 0 {
+            extras.machines.append(machines.output)
+        }
+        let deploymentQuery = "[].{name:name,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity}"
+        for account in items.filter({ $0.type.lowercased() == "microsoft.cognitiveservices/accounts" }).prefix(10) {
+            guard let group = account.resourceGroup,
+                  let result = try? LocalTool.run(az, ["cognitiveservices", "account", "deployment", "list", "-g", group, "-n", account.name, "--subscription", subscription,
+                                                       "--query", deploymentQuery, "-o", "json", "--only-show-errors"], timeout: 60),
+                  result.status == 0 else { continue }
+            extras.deployments[account.id.lowercased()] = result.output
+        }
+    }
+
+    /// This month's cost per resource and meter.
+    static let resourceQuery = #"{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ResourceId"},{"type":"Dimension","name":"Meter"}]}}"#
+
+    struct ListedResource: Decodable { let id: String; let name: String; let type: String; let location: String?; let resourceGroup: String?; let sku: String? }
+    struct Machine: Decodable { let id: String; let power: String?; let size: String? }
+    struct Deployment: Decodable { let name: String; let model: String?; let version: String?; let sku: String?; let capacity: Int? }
+
+    /// Joins per-resource costs with the resource list, VM states and model deployments. Resources that
+    /// cost money this month but no longer exist are kept and marked Deleted.
+    static func resources(_ extras: Extras, currency: String) -> [CloudResource] {
+        var costs: [String: (total: Decimal, meters: [String: Decimal])] = [:]
+        for page in extras.resourceCosts {
+            guard let query = try? JSONDecoder().decode(QueryResult.self, from: page) else { continue }
+            let names = query.properties.columns.map(\.name)
+            guard let cost = names.firstIndex(where: { $0 == "Cost" || $0 == "PreTaxCost" || $0 == "CostUSD" }),
+                  let id = names.firstIndex(of: "ResourceId"), let code = names.firstIndex(of: "Currency") else { continue }
+            let meter = names.firstIndex(of: "Meter")
+            for row in query.properties.rows where row.count > max(cost, id, code, meter ?? 0) {
+                guard let value = row[cost].number, value.isFinite, row[code].text.uppercased() == currency else { continue }
+                let key = row[id].text.lowercased()
+                guard !key.isEmpty else { continue }
+                let amount = Decimal(string: String(format: "%.6f", value)) ?? Decimal(value)
+                costs[key, default: (0, [:])].total += amount
+                if let meter { costs[key, default: (0, [:])].meters[row[meter].text.isEmpty ? "Other" : row[meter].text, default: 0] += amount }
+            }
+        }
+        let listed = extras.resources.flatMap { (try? JSONDecoder().decode([ListedResource].self, from: $0)) ?? [] }
+        let machines = Dictionary(extras.machines.flatMap { (try? JSONDecoder().decode([Machine].self, from: $0)) ?? [] }.map { ($0.id.lowercased(), $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        var result: [String: CloudResource] = [:]
+        for item in listed {
+            let key = item.id.lowercased()
+            let machine = machines[key]
+            let deployments = extras.deployments[key].flatMap { try? JSONDecoder().decode([Deployment].self, from: $0) }?
+                .map { ModelDeployment(name: $0.name, model: $0.model ?? $0.name, version: $0.version, sku: $0.sku, capacity: $0.capacity) }
+            result[key] = CloudResource(id: key, name: item.name, type: item.type.lowercased(), group: item.resourceGroup ?? Self.part(of: key, after: "resourcegroups") ?? "",
+                                        location: item.location, cost: nil, meters: [], state: machine.flatMap { Self.powerState($0.power) },
+                                        size: machine?.size ?? item.sku, models: deployments)
+        }
+        for (key, value) in costs {
+            var resource = result[key] ?? CloudResource(id: key, name: key.split(separator: "/").last.map(String.init) ?? key, type: Self.type(of: key),
+                                                       group: Self.part(of: key, after: "resourcegroups") ?? "", location: nil, cost: nil, meters: [],
+                                                       state: extras.resourceListRead ? "Deleted" : nil)
+            resource.cost = Money(value.total.rounded2, currency)
+            resource.meters = value.meters.sorted { $0.value > $1.value }.prefix(6).map { CostLine(name: $0.key, cost: Money($0.value.rounded2, currency)) }
+            result[key] = resource
+        }
+        return result.values.sorted {
+            let a = $0.cost?.amount ?? -1, b = $1.cost?.amount ?? -1
+            return a != b ? a > b : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }.prefix(80).map { $0 }
+    }
+
+    static func powerState(_ raw: String?) -> String? {
+        guard let raw = raw?.lowercased() else { return nil }
+        if raw.contains("running") { return "Running" }
+        if raw.contains("deallocat") { return "Deallocated" }
+        if raw.contains("stopped") { return "Stopped" }
+        if raw.contains("starting") { return "Starting" }
+        return raw.replacingOccurrences(of: "vm ", with: "").capitalized
+    }
+
+    static func part(of id: String, after segment: String) -> String? {
+        let parts = id.split(separator: "/").map(String.init)
+        guard let index = parts.firstIndex(where: { $0.lowercased() == segment }), parts.indices.contains(index + 1) else { return nil }
+        return parts[index + 1]
+    }
+
+    /// "microsoft.compute/virtualmachines" from a resource ID.
+    static func type(of id: String) -> String {
+        let parts = id.lowercased().split(separator: "/").map(String.init)
+        guard let index = parts.lastIndex(of: "providers"), parts.indices.contains(index + 2) else { return "unknown" }
+        return "\(parts[index + 1])/\(parts[index + 2])"
     }
 
     static func cliError(_ message: String) -> Error {
@@ -638,10 +758,16 @@ public struct AzureCostClient {
             let earliest = byService.values.flatMap(\.keys).min()
             return byService.compactMap { name, days in spike(service: name, days: days, currency: code, now: now, earliest: earliest) }
         }.sorted { $0.amount.amount > $1.amount.amount }
-        return BalanceSnapshot(balances: [], details: Array(top), reportedConsumption: totals.keys.sorted().map { Money(totals[$0]!, $0) },
+        var snapshot = BalanceSnapshot(balances: [], details: Array(top), reportedConsumption: totals.keys.sorted().map { Money(totals[$0]!, $0) },
                                observedAt: now, source: source,
                                coverage: "Month-to-date actual cost from Azure Cost Management for \(count) enabled subscription\(count == 1 ? "" : "s"), read through the Azure CLI. Costs can lag by several hours and exclude credits, invoices and taxes.",
                                consumptionPeriod: "This month", anomalies: daily.isEmpty ? nil : anomalies)
+        let allServices = (services[primary] ?? [:]).sorted { $0.value > $1.value }.map { CostLine(name: $0.key, cost: Money($0.value.rounded2, primary)) }
+        snapshot.services = allServices.isEmpty ? nil : allServices
+        var perDay: [String: Decimal] = [:]
+        for days in (daily[primary] ?? [:]).values { for (day, amount) in days { perDay[day, default: 0] += amount } }
+        snapshot.dailyCosts = perDay.isEmpty ? nil : perDay.keys.sorted().map { DailyCost(day: $0, amount: perDay[$0]!.rounded2) }
+        return snapshot
     }
 
     static func usageDay(_ value: CostValue) -> String? {
