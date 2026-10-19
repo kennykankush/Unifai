@@ -199,19 +199,6 @@ struct LogoStack: View {
 
 // MARK: - Money
 
-extension Money {
-    /// Amount without the currency code, for display next to a separate code label.
-    var amountText: String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 2
-        // Cents for display; more precision only for sub-cent amounts that would otherwise read as zero.
-        formatter.maximumFractionDigits = amount != 0 && abs(amount) < Decimal(string: "0.01")! ? 4 : 2
-        return formatter.string(from: amount as NSDecimalNumber) ?? amount.description
-    }
-    var plainText: String { "\(amountText) \(currency)" }
-}
-
 struct MoneyText: View {
     let money: Money
     var size: CGFloat = 28
@@ -598,6 +585,18 @@ struct WalletCard: View {
     }
 
     @ViewBuilder private var status: some View {
+        HStack(spacing: 6) {
+            if let credits = account.snapshot?.resetCredits, !credits.isEmpty, account.lastError == nil {
+                GlassChip(text: credits.count == 1 ? "Free reset" : "\(credits.count) free resets", symbol: "gift.fill")
+            }
+            if account.lastError == nil, account.snapshot?.anomalies?.isEmpty == false {
+                GlassChip(text: "Cost spike", dot: Palette.warning)
+            }
+            health
+        }
+    }
+
+    @ViewBuilder private var health: some View {
         if account.lastError != nil { GlassChip(text: "Failed", dot: Palette.negative) }
         else if account.snapshot?.limitReached == true { GlassChip(text: "Limit reached", dot: Palette.negative) }
         else if account.mode == .manual { GlassChip(text: "Manual", symbol: "square.and.pencil") }

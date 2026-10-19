@@ -1,0 +1,117 @@
+import Foundation
+
+/// One entry in the timeline: something that happened to your accounts or in the AI world.
+public enum TimelineKind: String, Codable, CaseIterable {
+    case earlyReset = "Early reset"
+    case reset = "Reset"
+    case limitReached = "Limit reached"
+    case resetCredit = "Free reset"
+    case anomaly = "Cost spike"
+    case recorded = "Recorded"
+    case release = "Release"
+    case status = "Status"
+    case post = "Post"
+
+    public var isAccountEvent: Bool { [.earlyReset, .reset, .limitReached, .resetCredit, .anomaly, .recorded].contains(self) }
+}
+
+public struct TimelineEvent: Codable, Identifiable, Hashable {
+    /// Stable key so the same event is never recorded twice.
+    public var id: String
+    public var date: Date
+    public var kind: TimelineKind
+    public var title: String
+    public var detail: String
+    public var source: URL?
+    public var sourceName: String
+    public var accountID: UUID?
+    /// Worth a notification and a highlight.
+    public var important: Bool
+    public init(id: String, date: Date, kind: TimelineKind, title: String, detail: String, source: URL? = nil, sourceName: String, accountID: UUID? = nil, important: Bool = false) {
+        self.id = id; self.date = date; self.kind = kind; self.title = title; self.detail = detail
+        self.source = source; self.sourceName = sourceName; self.accountID = accountID; self.important = important
+    }
+}
+
+public extension PersistentState {
+    static let timelineLimit = 600
+
+    /// Adds events not already recorded, newest first, keeping the most recent `timelineLimit`.
+    /// Returns the events that were new.
+    @discardableResult
+    mutating func record(_ incoming: [TimelineEvent]) -> [TimelineEvent] {
+        var existing = events ?? []
+        var known: [String: Int] = [:]
+        for (index, event) in existing.enumerated() { known[event.id] = index }
+        // A status incident keeps its place but takes the latest update.
+        for event in incoming where event.kind == .status {
+            if let index = known[event.id], existing[index].detail != event.detail {
+                existing[index].detail = event.detail; existing[index].important = event.important
+            }
+        }
+        let fresh = incoming.filter { known[$0.id] == nil }
+        guard !fresh.isEmpty else { if existing != (events ?? []) { events = existing }; return [] }
+        existing.append(contentsOf: fresh)
+        existing.sort { $0.date > $1.date }
+        events = Array(existing.prefix(Self.timelineLimit))
+        return fresh
+    }
+}
+
+/// Spots resets, limits and new reset credits by comparing a wallet's new reading with the last one.
+public enum AllowanceWatch {
+    public static func events(old: BalanceSnapshot?, new: BalanceSnapshot, account: ConnectedAccount, now: Date = .now) -> [TimelineEvent] {
+        let name = Catalogue.integration(account.integrationID)?.name ?? account.integrationID
+        var events: [TimelineEvent] = []
+        let previous = Dictionary((old?.allowances ?? []).map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        for window in new.allowances ?? [] {
+            guard let before = previous[window.name] else { continue }
+            let stamp = Int((before.resetsAt ?? now).timeIntervalSince1970)
+            let dropped = before.usedPercent - window.usedPercent >= 15 || (before.usedPercent >= 100 && window.usedPercent < 100)
+            if dropped {
+                // Earlier than 15 minutes before the scheduled reset means someone reset it.
+                let early = before.resetsAt.map { now < $0.addingTimeInterval(-15 * 60) } ?? false
+                let scheduled = before.resetsAt.map { " The scheduled reset was \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
+                events.append(TimelineEvent(
+                    id: "\(early ? "early-" : "")reset-\(account.id)-\(window.name)-\(stamp)", date: now, kind: early ? .earlyReset : .reset,
+                    title: early ? "\(name): \(window.name.lowercased()) was reset early" : "\(name): \(window.name.lowercased()) reset",
+                    detail: "Usage went from \(before.usedPercent)% to \(window.usedPercent)%.\(early ? scheduled : "")",
+                    sourceName: name, accountID: account.id, important: early || before.usedPercent >= 100))
+            } else if before.usedPercent < 100 && window.usedPercent >= 100 {
+                let reset = window.resetsAt.map { " It resets \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
+                events.append(TimelineEvent(
+                    id: "limit-\(account.id)-\(window.name)-\(Int((window.resetsAt ?? now).timeIntervalSince1970))", date: now, kind: .limitReached,
+                    title: "\(name): \(window.name.lowercased()) limit reached", detail: "You have used 100% of this window.\(reset)",
+                    sourceName: name, accountID: account.id, important: true))
+            }
+        }
+        let known = Set((old?.resetCredits ?? []).map(\.key))
+        for credit in new.resetCredits ?? [] where !known.contains(credit.key) {
+            let expiry = credit.expiresAt.map { " Expires \($0.formatted(date: .abbreviated, time: .omitted))." } ?? ""
+            events.append(TimelineEvent(
+                id: "credit-\(account.id)-\(credit.key)", date: credit.grantedAt ?? now, kind: .resetCredit,
+                title: "\(name): free reset available", detail: "\(credit.title).\(expiry) Redeem it in Codex when you hit a limit.",
+                sourceName: name, accountID: account.id, important: true))
+        }
+        return events
+    }
+}
+
+/// Codex plan guidance from how often limits are hit and how much is used.
+public enum PlanAdvisor {
+    public static func advice(for account: ConnectedAccount, events: [TimelineEvent], now: Date = .now) -> String? {
+        guard let snapshot = account.snapshot, snapshot.allowances?.isEmpty == false else { return nil }
+        let recent = events.filter { $0.accountID == account.id && $0.kind == .limitReached && $0.date > now.addingTimeInterval(-28 * 86400) }
+        let weekly = recent.filter { $0.title.localizedCaseInsensitiveContains("weekly") }.count
+        let credits = snapshot.resetCredits?.count ?? 0
+        if weekly >= 2 { return "Weekly limit hit \(weekly) times in 4 weeks; a bigger plan may pay off" }
+        if let window = snapshot.allowances?.first(where: { $0.windowMinutes == 10080 }), window.usedPercent >= 100 {
+            return credits > 0 ? "Weekly limit reached; you have \(credits) free reset\(credits == 1 ? "" : "s")" : "Weekly limit reached; resets \(window.resetsAt.map { $0.formatted(.relative(presentation: .named)) } ?? "later")"
+        }
+        if let days = snapshot.usageDays, days.count >= 14 {
+            let recentDays = days.suffix(14).filter { $0.tokens > 0 }.count
+            if recentDays <= 3 { return "Used on \(recentDays) of the last 14 days; a smaller plan may be enough" }
+        }
+        return nil
+    }
+}

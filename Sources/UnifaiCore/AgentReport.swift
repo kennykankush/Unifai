@@ -39,6 +39,9 @@ public enum AgentReport {
         public var usageWindows: [Allowance]?
         public var limitReached: Bool?
         public var consumptionPeriod: String?
+        public var freeResets: Int?
+        public var planAdvice: String?
+        public var costSpikes: [String]?
     }
 
     public struct Payment: Codable, Equatable {
@@ -131,7 +134,129 @@ public enum AgentReport {
                     Allowance(name: $0.name, usedPercent: $0.usedPercent, remainingPercent: 100 - $0.usedPercent, windowMinutes: $0.windowMinutes, resetsAt: $0.resetsAt)
                 },
                 limitReached: snapshot?.limitReached,
-                consumptionPeriod: snapshot?.consumptionPeriod)
+                consumptionPeriod: snapshot?.consumptionPeriod,
+                freeResets: snapshot?.resetCredits?.count,
+                planAdvice: PlanAdvisor.advice(for: account, events: state.events ?? [], now: now),
+                costSpikes: snapshot?.anomalies.flatMap { $0.isEmpty ? nil : $0.map(\.summary) })
+        }
+    }
+
+    // MARK: Headroom
+
+    public struct HeadroomItem: Codable, Equatable {
+        public var provider: String
+        public var providerID: String
+        public var label: String
+        /// allowance (plan limits), prepaid (credit balance) or payAsYouGo (billed for what you use).
+        public var kind: String
+        public var usableNow: Bool
+        public var summary: String
+        public var remainingPercent: Int?
+        public var nextReset: Date?
+        public var freeResets: Int?
+        public var creditRemaining: [Amount]
+        public var spentThisMonth: [Amount]
+        public var observedAt: Date?
+        public var stale: Bool
+    }
+
+    public struct Headroom: Codable, Equatable {
+        public var generatedAt: Date
+        public var recommendation: String
+        /// Best first: plan allowances with room, then prepaid credit, then pay-as-you-go, then anything exhausted.
+        public var ranked: [HeadroomItem]
+        public var budget: Budget?
+        public var note: String
+    }
+
+    static func relative(_ date: Date, from now: Date) -> String {
+        let hours = date.timeIntervalSince(now) / 3600
+        if hours < 1 { return "in under an hour" }
+        if hours < 36 { return "in \(Int(hours.rounded())) hours" }
+        return "in \(Int((hours / 24).rounded())) days"
+    }
+
+    /// Where there is capacity to spend right now, for an agent choosing a provider for heavy work.
+    public static func headroom(_ state: PersistentState, now: Date = .now, rates: RateTable? = nil) -> Headroom {
+        var scored: [(Double, HeadroomItem)] = []
+        for account in state.accounts where account.mode == .live {
+            guard let snapshot = account.snapshot else { continue }
+            let provider = Catalogue.integration(account.integrationID)?.name ?? account.integrationID
+            let stale = snapshot.isStale(at: now)
+            let credits = snapshot.resetCredits?.count ?? 0
+            if let windows = snapshot.allowances, !windows.isEmpty {
+                let remaining = windows.map { 100 - $0.usedPercent }.min() ?? 0
+                let blocking = windows.filter { $0.usedPercent >= 100 }.compactMap(\.resetsAt).max()
+                let next = blocking ?? windows.compactMap(\.resetsAt).min()
+                // Codex credits pay for usage past the plan's limits.
+                let credit = snapshot.balances.first { $0.currency == "CREDITS" && $0.amount > 0 }
+                let exhausted = remaining <= 0 || snapshot.limitReached == true
+                var parts: [String] = []
+                if exhausted {
+                    let used = windows.filter { $0.usedPercent >= 100 }.map(\.name)
+                    parts.append("\((used.isEmpty ? ["Limit"] : used).joined(separator: " and ")) used up\(blocking.map { ", resets \(relative($0, from: now))" } ?? "")")
+                    if let credit { parts.append("\(credit.amountText) credits cover usage until then") }
+                } else {
+                    parts.append(windows.map { "\($0.name) \(100 - $0.usedPercent)% left" }.joined(separator: ", "))
+                    if let credit { parts.append("\(credit.amountText) credits for usage past the limits") }
+                }
+                if credits > 0 { parts.append("\(credits) free reset\(credits == 1 ? "" : "s") available") }
+                let usable = !exhausted || credit != nil
+                let score = !exhausted ? 3 + Double(remaining) / 100 : credit != nil ? 1.8 : credits > 0 ? 0.5 : 0
+                scored.append((score, HeadroomItem(
+                    provider: provider, providerID: account.integrationID, label: account.label, kind: "allowance", usableNow: usable, summary: parts.joined(separator: "; "),
+                    remainingPercent: remaining, nextReset: next, freeResets: credits > 0 ? credits : nil,
+                    creditRemaining: snapshot.balances.map(Amount.init), spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale)))
+            } else if let balance = snapshot.balances.first {
+                let floor = account.lowBalanceAlert ?? ConnectedAccount.defaultLowBalance(for: balance.currency)
+                let usable = balance.amount > 0
+                scored.append((usable ? (balance.amount >= floor ? 2 : 1.2) : 0, HeadroomItem(
+                    provider: provider, providerID: account.integrationID, label: account.label, kind: "prepaid", usableNow: usable,
+                    summary: "\(balance.plainText) credit left\(usable && balance.amount < floor ? ", below the low-balance alert" : "")",
+                    remainingPercent: nil, nextReset: nil, freeResets: nil, creditRemaining: snapshot.balances.map(Amount.init),
+                    spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale)))
+            } else if !snapshot.reportedConsumption.isEmpty, Catalogue.integration(account.integrationID)?.billing == .payAsYouGo {
+                let spent = snapshot.reportedConsumption.map(\.plainText).joined(separator: ", ")
+                scored.append((1, HeadroomItem(
+                    provider: provider, providerID: account.integrationID, label: account.label, kind: "payAsYouGo", usableNow: true,
+                    summary: "Billed per use; \(spent) \(snapshot.consumptionPeriod?.lowercased() ?? "so far")",
+                    remainingPercent: nil, nextReset: nil, freeResets: nil, creditRemaining: [],
+                    spentThisMonth: snapshot.reportedConsumption.map(Amount.init), observedAt: snapshot.observedAt, stale: stale)))
+            }
+        }
+        let ranked = scored.sorted { $0.0 > $1.0 }.map(\.1)
+        let budget = overview(state, now: now, rates: rates).budget
+        var recommendation: String
+        if let best = ranked.first(where: \.usableNow) {
+            recommendation = "Use \(best.provider) (\(best.label)) first: \(best.summary)."
+        } else if let waiting = ranked.first {
+            recommendation = "Nothing has room right now. \(waiting.provider): \(waiting.summary)."
+        } else {
+            recommendation = "No live wallets with readings. Connect or refresh accounts in the Unifai app."
+        }
+        if let budget, budget.percentUsed >= 100 { recommendation += " The monthly budget is used up; avoid pay-as-you-go." }
+        return Headroom(generatedAt: now, recommendation: recommendation, ranked: ranked, budget: budget,
+                        note: "Ranked from the app's last saved readings; check observedAt and stale. Allowances reset on the provider's schedule; free resets are redeemed in the provider's own app.")
+    }
+
+    // MARK: Timeline
+
+    public struct Event: Codable, Equatable {
+        public var date: Date
+        public var kind: String
+        public var title: String
+        public var detail: String
+        public var source: String?
+        public var from: String
+        public var important: Bool
+    }
+
+    public static func timeline(_ state: PersistentState, kinds: Set<String>? = nil, since: Date? = nil, limit: Int = 30) -> [Event] {
+        (state.events ?? []).filter { event in
+            (kinds == nil || kinds!.contains(event.kind.rawValue.lowercased())) && (since == nil || event.date >= since!)
+        }.prefix(max(0, limit)).map {
+            Event(date: $0.date, kind: $0.kind.rawValue, title: $0.title, detail: $0.detail, source: $0.source?.absoluteString,
+                  from: $0.sourceName, important: $0.important)
         }
     }
 

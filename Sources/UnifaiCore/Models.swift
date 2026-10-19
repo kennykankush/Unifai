@@ -1,5 +1,14 @@
 import Foundation
 
+public extension Decimal {
+    /// Rounded half-up to cents.
+    var rounded2: Decimal {
+        var value = self, result = Decimal()
+        NSDecimalRound(&result, &value, 2, .plain)
+        return result
+    }
+}
+
 public struct Money: Codable, Hashable, Identifiable {
     public var amount: Decimal
     public var currency: String
@@ -16,6 +25,16 @@ public struct Money: Codable, Hashable, Identifiable {
         formatter.maximumFractionDigits = 8
         return "\(currency) \(formatter.string(from: amount as NSDecimalNumber) ?? amount.description)"
     }
+    /// Amount without the currency code, for display next to a separate code label.
+    public var amountText: String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        // Cents for display; more precision only for sub-cent amounts that would otherwise read as zero.
+        formatter.maximumFractionDigits = amount != 0 && abs(amount) < Decimal(string: "0.01")! ? 4 : 2
+        return formatter.string(from: amount as NSDecimalNumber) ?? amount.description
+    }
+    public var plainText: String { "\(amountText) \(currency)" }
     public static func parseAmount(_ input: String) -> Decimal? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count <= 24, text.range(of: #"^[0-9]+(\.[0-9]{1,8})?$"#, options: .regularExpression) != nil,
@@ -34,6 +53,43 @@ public struct BalanceDetail: Codable, Hashable {
     public var label: String
     public var value: Money
     public init(_ label: String, _ value: Money) { self.label = label; self.value = value }
+}
+
+/// A free rate-limit reset granted by a provider (Codex grants these occasionally).
+public struct ResetCredit: Codable, Hashable {
+    public var id: String?
+    public var title: String
+    public var grantedAt: Date?
+    public var expiresAt: Date?
+    public var key: String { id ?? "\(title)-\(Int(grantedAt?.timeIntervalSince1970 ?? 0))" }
+    public init(id: String? = nil, title: String, grantedAt: Date?, expiresAt: Date?) {
+        self.id = id; self.title = title; self.grantedAt = grantedAt; self.expiresAt = expiresAt
+    }
+}
+
+/// A service whose latest daily cost jumped well above its recent normal, or started from nothing.
+public struct CostAnomaly: Codable, Hashable {
+    public var service: String
+    /// The day of the spike, yyyy-MM-dd (UTC, as the provider reports it).
+    public var day: String
+    public var amount: Money
+    /// The median daily cost over the week before; zero when the service is new.
+    public var typical: Money
+    public init(service: String, day: String, amount: Money, typical: Money) {
+        self.service = service; self.day = day; self.amount = amount; self.typical = typical
+    }
+    public var summary: String {
+        typical.amount == 0
+            ? "\(service) started costing \(amount.plainText) a day on \(day)"
+            : "\(service) cost \(amount.plainText) on \(day), against a usual \(typical.plainText) a day"
+    }
+}
+
+/// Tokens used on one day, as reported by the provider.
+public struct UsageDay: Codable, Hashable {
+    public var date: String
+    public var tokens: Int64
+    public init(date: String, tokens: Int64) { self.date = date; self.tokens = tokens }
 }
 
 /// A usage allowance that resets on a schedule, such as Codex's 5-hour and weekly windows.
@@ -70,11 +126,18 @@ public struct BalanceSnapshot: Codable, Hashable {
     public var allowances: [AllowanceWindow]?
     public var limitReached: Bool?
     public var consumptionPeriod: String?
+    public var resetCredits: [ResetCredit]?
+    public var usageDays: [UsageDay]?
+    public var lifetimeTokens: Int64?
+    /// Notable changes spotted in this reading, such as a service's daily cost jumping.
+    public var anomalies: [CostAnomaly]?
     public init(balances: [Money], details: [BalanceDetail] = [], reportedConsumption: [Money] = [], observedAt: Date = .now, source: URL, coverage: String,
-                plan: String? = nil, allowances: [AllowanceWindow]? = nil, limitReached: Bool? = nil, consumptionPeriod: String? = nil) {
+                plan: String? = nil, allowances: [AllowanceWindow]? = nil, limitReached: Bool? = nil, consumptionPeriod: String? = nil,
+                resetCredits: [ResetCredit]? = nil, usageDays: [UsageDay]? = nil, lifetimeTokens: Int64? = nil, anomalies: [CostAnomaly]? = nil) {
         self.balances = balances; self.details = details; self.reportedConsumption = reportedConsumption
         self.observedAt = observedAt; self.source = source; self.coverage = coverage
         self.plan = plan; self.allowances = allowances; self.limitReached = limitReached; self.consumptionPeriod = consumptionPeriod
+        self.resetCredits = resetCredits; self.usageDays = usageDays; self.lifetimeTokens = lifetimeTokens; self.anomalies = anomalies
     }
     public func isStale(at date: Date = .now) -> Bool { date.timeIntervalSince(observedAt) > 3600 }
 }
@@ -94,6 +157,18 @@ public struct ConnectedAccount: Codable, Identifiable, Hashable {
     public init(id: UUID = UUID(), integrationID: String, label: String, billingScope: String = "", mode: ConnectionMode) {
         self.id = id; self.integrationID = integrationID; self.label = label
         self.billingScope = billingScope; self.mode = mode; self.createdAt = .now
+    }
+}
+
+public extension ConnectedAccount {
+    /// Low-credit thresholds by unit, used until a wallet sets its own.
+    static func defaultLowBalance(for currency: String) -> Decimal {
+        switch currency {
+        case "CREDITS": return 20
+        case "CNY": return 35
+        case "JPY": return 750
+        default: return 5
+        }
     }
 }
 
@@ -243,8 +318,11 @@ public struct ReleaseItem: Codable, Identifiable, Hashable {
     public var url: URL
     public var publishedAt: Date?
     public var prerelease: Bool
-    public init(id: Int, title: String, tag: String, url: URL, publishedAt: Date?, prerelease: Bool) {
+    /// The start of the release notes, as plain text.
+    public var summary: String?
+    public init(id: Int, title: String, tag: String, url: URL, publishedAt: Date?, prerelease: Bool, summary: String? = nil) {
         self.id = id; self.title = title; self.tag = tag; self.url = url; self.publishedAt = publishedAt; self.prerelease = prerelease
+        self.summary = summary
     }
 }
 
@@ -292,6 +370,17 @@ public struct PersistentState: Codable, Equatable {
     public var monthlyBudget: Money?
     /// Refresh live wallets in the background while the app runs. Nil means on.
     public var autoRefresh: Bool?
+    public var events: [TimelineEvent]?
+    public var timelineCheckedAt: Date?
+    /// X accounts to follow in the timeline, without the @.
+    public var xHandles: [String]?
+    public var xUserIDs: [String: String]?
+    public var xSinceIDs: [String: String]?
+    /// X API reads per month ("yyyy-MM"), for the cost estimate.
+    public var xPostReads: [String: Int]?
+    public var xUserLookups: [String: Int]?
+    /// Repositories already followed once for a wallet, so removing one sticks.
+    public var autoFollowed: [String]?
     public init() {}
 }
 

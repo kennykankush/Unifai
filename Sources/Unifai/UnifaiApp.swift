@@ -36,7 +36,8 @@ struct UnifaiApp: App {
         if fixtureMode {
             let vault = MemoryVault()
             model = AppStore(repository: repository, vault: vault,
-                             balances: FixtureWorkspace.balance, releases: FixtureWorkspace.releases, rates: FixtureWorkspace.rates)
+                             balances: FixtureWorkspace.balance, releases: FixtureWorkspace.releases, rates: FixtureWorkspace.rates,
+                             status: FixtureWorkspace.status, posts: FixtureWorkspace.posts)
             if !args.contains("--fixture-empty"), Bundle.main.object(forInfoDictionaryKey: "UnifaiFixtureEmpty") as? Bool != true, model.loadFailure == nil {
                 do { try FixtureWorkspace.prepare(model, vault: vault) }
                 catch { model.notice = "Fixture setup failed: \(error.localizedDescription)" }
@@ -52,7 +53,7 @@ struct UnifaiApp: App {
         AppRuntime.channel = fixtureMode ? "fixture" : channel
         // Demo and dev builds: open a specific screen for visual verification.
         if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--destination"), args.indices.contains(index + 1) {
-            AppRuntime.initialDestination = Destination(rawValue: args[index + 1])
+            AppRuntime.initialDestination = args[index + 1] == "Releases" ? .timeline : Destination(rawValue: args[index + 1])
         }
         _store = StateObject(wrappedValue: model)
     }

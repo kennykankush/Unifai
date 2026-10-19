@@ -25,15 +25,7 @@ import UnifaiCore
         [.banner, .sound, .list]
     }
 
-    /// Default low-credit thresholds by unit, used until a wallet sets its own.
-    static func defaultThreshold(for currency: String) -> Decimal {
-        switch currency {
-        case "CREDITS": return 20
-        case "CNY": return 35
-        case "JPY": return 750
-        default: return 5
-        }
-    }
+    static func defaultThreshold(for currency: String) -> Decimal { ConnectedAccount.defaultLowBalance(for: currency) }
 
     func evaluate(_ store: AppStore) {
         guard enabled, !AppRuntime.fixtureMode else { return }
@@ -76,7 +68,40 @@ import UnifaiCore
                 break
             }
         }
+        notifyTimeline(state)
+        remindToCloseMonth(state)
         scheduleUpcoming(state)
+    }
+
+    /// Early resets, free resets, cost spikes and reset posts, once each. Events already saved when
+    /// notifications first run are only marked seen.
+    private func notifyTimeline(_ state: PersistentState) {
+        let notable: Set<TimelineKind> = [.earlyReset, .resetCredit, .anomaly, .post]
+        let events = (state.events ?? []).filter { $0.important && notable.contains($0.kind) }
+        guard let seenList = defaults.stringArray(forKey: "notifiedEvents") else {
+            defaults.set(events.map(\.id), forKey: "notifiedEvents"); return
+        }
+        var seen = Set(seenList)
+        for event in events where !seen.contains(event.id) {
+            seen.insert(event.id)
+            guard event.date > Date.now.addingTimeInterval(-12 * 3600) || event.kind != .post else { continue }
+            post("event-\(event.id)", title: event.title, body: event.detail)
+        }
+        defaults.set(Array(seen.prefix(800)), forKey: "notifiedEvents")
+    }
+
+    /// On the first days of a month, once: last month still has Auto or Estimate entries without a receipt.
+    private func remindToCloseMonth(_ state: PersistentState) {
+        let calendar = Calendar.current
+        guard calendar.component(.day, from: .now) <= 3,
+              let lastMonth = calendar.date(byAdding: .month, value: -1, to: .now),
+              let interval = calendar.dateInterval(of: .month, for: lastMonth) else { return }
+        let open = state.payments.filter { $0.autoRecorded && interval.contains($0.paidAt) }
+        let key = "closeMonth-\(lastMonth.formatted(.iso8601.year().month()))"
+        guard !open.isEmpty, !defaults.bool(forKey: key) else { return }
+        defaults.set(true, forKey: key)
+        post(key, title: "Close \(lastMonth.formatted(.dateTime.month(.wide)))",
+             body: "\(open.count) payment\(open.count == 1 ? " is" : "s are") still Auto or Estimate. Import the receipts or confirm them in Payments.")
     }
 
     /// Renewal reminders the day before at 9:00, and limit-reset notices at the reset time.

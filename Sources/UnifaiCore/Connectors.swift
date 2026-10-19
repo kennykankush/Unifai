@@ -221,13 +221,14 @@ public struct GitHubClient {
                       item.html_url.user == nil, item.html_url.password == nil,
                       item.html_url.port == nil || item.html_url.port == 443 else { throw ConnectorError.invalidResponse }
                 return ReleaseItem(id: item.id, title: item.name?.isEmpty == false ? item.name! : item.tag_name,
-                                   tag: item.tag_name, url: item.html_url, publishedAt: item.published_at, prerelease: item.prerelease)
+                                   tag: item.tag_name, url: item.html_url, publishedAt: item.published_at, prerelease: item.prerelease,
+                                   summary: ReleaseRelevance.summary(fromMarkdown: item.body))
             }
         } catch { throw ConnectorError.invalidResponse }
     }
     private struct ReleaseResponse: Decodable {
         let id: Int; let name: String?; let tag_name: String; let html_url: URL
-        let published_at: Date?; let prerelease: Bool; let draft: Bool
+        let published_at: Date?; let prerelease: Bool; let draft: Bool; let body: String?
     }
 }
 
@@ -346,13 +347,15 @@ public struct CodexClient {
 
     public func fetch(now: Date = .now) async throws -> BalanceSnapshot {
         guard let codex = Self.locate() else { throw Self.notInstalled }
-        let (account, limits) = try await Task.detached { () throws -> (Data, Data) in
+        let (account, limits, usage) = try await Task.detached { () throws -> (Data, Data, Data?) in
             let session = try CodexSession(codex: codex)
             let account = try session.request(id: 1, method: "account/read", params: ["refreshToken": false])
             let limits = try session.request(id: 2, method: "account/rateLimits/read")
-            return (account, limits)
+            // Older Codex versions have no usage history; the wallet works without it.
+            let usage = try? session.request(id: 3, method: "account/usage/read", timeout: 15)
+            return (account, limits, usage)
         }.value
-        return try Self.decode(account: account, limits: limits, now: now)
+        return try Self.decode(account: account, limits: limits, usage: usage, now: now)
     }
 
     /// Runs Codex's own ChatGPT sign-in: Codex returns a browser URL and hosts the callback,
@@ -381,18 +384,31 @@ public struct CodexClient {
         struct Window: Decodable { let usedPercent: Int; let windowDurationMins: Int?; let resetsAt: Int? }
         struct Credits: Decodable { let hasCredits: Bool; let unlimited: Bool; let balance: String? }
         struct Snapshot: Decodable { let planType: String?; let primary: Window?; let secondary: Window?; let credits: Credits?; let rateLimitReachedType: String? }
+        struct ResetCredits: Decodable {
+            struct Credit: Decodable { let id: String?; let status: String?; let grantedAt: Int?; let expiresAt: Int?; let title: String? }
+            let availableCount: Int
+            let credits: [Credit]?
+        }
         let rateLimits: Snapshot
+        let rateLimitResetCredits: ResetCredits?
+    }
+    struct UsageResult: Decodable {
+        struct Bucket: Decodable { let startDate: String; let tokens: Int64 }
+        struct Summary: Decodable { let lifetimeTokens: Int64? }
+        let dailyUsageBuckets: [Bucket]?
+        let summary: Summary?
     }
 
-    public static func decode(account accountData: Data, limits limitsData: Data, now: Date = .now) throws -> BalanceSnapshot {
+    public static func decode(account accountData: Data, limits limitsData: Data, usage usageData: Data? = nil, now: Date = .now) throws -> BalanceSnapshot {
         let account = try JSONDecoder().decode(AccountResult.self, from: accountData).account
         guard let account else { throw ValidationError.message("Codex is not signed in. Run codex login, then refresh.") }
         guard account.type == "chatgpt" else {
             throw ValidationError.message("Codex is signed in with an API key, which has no ChatGPT plan or Codex limits. Sign in with ChatGPT using codex login.")
         }
-        let limits: LimitsResult.Snapshot
-        do { limits = try JSONDecoder().decode(LimitsResult.self, from: limitsData).rateLimits }
+        let result: LimitsResult
+        do { result = try JSONDecoder().decode(LimitsResult.self, from: limitsData) }
         catch { throw ConnectorError.invalidResponse }
+        let limits = result.rateLimits
         let windows = [limits.primary, limits.secondary].compactMap { $0 }.map { window in
             AllowanceWindow(name: AllowanceWindow.name(forMinutes: window.windowDurationMins), usedPercent: max(0, min(100, window.usedPercent)),
                             windowMinutes: window.windowDurationMins, resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) })
@@ -405,9 +421,22 @@ public struct CodexClient {
         }
         if limits.credits?.unlimited == true { details.append(BalanceDetail("Codex credits", Money(0, "UNLIMITED"))) }
         let plan = (account.planType ?? limits.planType).map(Self.planName)
+        var credits: [ResetCredit]?
+        if let summary = result.rateLimitResetCredits {
+            let date = { (seconds: Int?) in seconds.map { Date(timeIntervalSince1970: TimeInterval($0)) } }
+            var rows = (summary.credits ?? []).filter { ($0.status ?? "available") == "available" }
+                .map { ResetCredit(id: $0.id, title: $0.title?.isEmpty == false ? $0.title! : "Free reset", grantedAt: date($0.grantedAt), expiresAt: date($0.expiresAt)) }
+            // The list can be capped or missing; the count is authoritative.
+            while rows.count < summary.availableCount { rows.append(ResetCredit(title: "Free reset", grantedAt: nil, expiresAt: nil)) }
+            credits = Array(rows.prefix(max(0, summary.availableCount)))
+        }
+        let usage = usageData.flatMap { try? JSONDecoder().decode(UsageResult.self, from: $0) }
+        let days = usage?.dailyUsageBuckets?.filter { $0.tokens >= 0 }.sorted { $0.startDate < $1.startDate }.suffix(120)
+            .map { UsageDay(date: $0.startDate, tokens: $0.tokens) }
         return BalanceSnapshot(balances: balances, details: details, observedAt: now, source: source,
-                               coverage: "Read through the Codex app on this Mac using its ChatGPT sign-in. Percentages and reset times are reported by OpenAI. Subscription payments are not included.",
-                               plan: plan, allowances: windows, limitReached: limits.rateLimitReachedType != nil)
+                               coverage: "Read through the Codex app on this Mac using its ChatGPT sign-in. Percentages, reset times, free resets and token history are reported by OpenAI. Subscription payments are not included.",
+                               plan: plan, allowances: windows, limitReached: limits.rateLimitReachedType != nil,
+                               resetCredits: credits, usageDays: days.map(Array.init), lifetimeTokens: usage?.summary?.lifetimeTokens)
     }
 
     static func planName(_ raw: String) -> String {
@@ -497,18 +526,26 @@ public struct AzureCostClient {
             guard list.status == 0 else { throw Self.cliError(list.error) }
             let subscriptions = (try? JSONDecoder().decode([Subscription].self, from: list.output)) ?? []
             guard !subscriptions.isEmpty else { throw ValidationError.message("No enabled Azure subscriptions. Run az login with the account that owns them, then refresh.") }
-            let body = #"{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}"#
-            return try subscriptions.prefix(10).map { subscription in
-                let url = "https://management.azure.com/subscriptions/\(subscription.id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
-                let arguments = ["rest", "--method", "post", "--url", url, "--body", body, "--only-show-errors"]
-                var result = try LocalTool.run(az, arguments, timeout: 90)
-                // Cost Management allows only a few queries per minute per scope; wait once and retry.
-                if result.status != 0, result.error.contains("429") {
-                    Thread.sleep(forTimeInterval: 12)
-                    result = try LocalTool.run(az, arguments, timeout: 90)
+            // One daily query covers both this month's total and the spike check, since Cost Management
+            // allows only a few queries per minute per scope.
+            let body = Self.dailyQuery(now: now)
+            return try subscriptions.prefix(10).flatMap { subscription -> [(String, Data)] in
+                var url: String? = "https://management.azure.com/subscriptions/\(subscription.id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+                var pages: [(String, Data)] = []
+                while let next = url, pages.count < 4 {
+                    let arguments = ["rest", "--method", "post", "--url", next, "--body", body, "--only-show-errors"]
+                    var result = try LocalTool.run(az, arguments, timeout: 90)
+                    // Wait once and retry when throttled.
+                    if result.status != 0, result.error.contains("429") {
+                        Thread.sleep(forTimeInterval: 12)
+                        result = try LocalTool.run(az, arguments, timeout: 90)
+                    }
+                    guard result.status == 0 else { throw Self.cliError(result.error) }
+                    pages.append((subscription.name, result.output))
+                    url = (try? JSONDecoder().decode(QueryResult.self, from: result.output))?.properties.nextLink
+                        .flatMap { URL(string: $0)?.host == "management.azure.com" ? $0 : nil }
                 }
-                guard result.status == 0 else { throw Self.cliError(result.error) }
-                return (subscription.name, result.output)
+                return pages
             }
         }.value
         return try Self.decode(results, now: now)
@@ -525,11 +562,25 @@ public struct AzureCostClient {
         return ValidationError.message("The Azure cost query failed. Check that az works in Terminal, then refresh.")
     }
 
+    /// Daily actual cost per service from 35 days ago through today.
+    static func dailyQuery(now: Date) -> String {
+        let from = Self.day.string(from: now.addingTimeInterval(-35 * 86400))
+        let to = Self.day.string(from: now)
+        return #"{"type":"ActualCost","timeframe":"Custom","timePeriod":{"from":"\#(from)T00:00:00Z","to":"\#(to)T23:59:59Z"},"dataset":{"granularity":"Daily","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}"#
+    }
+    static let day: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     struct QueryResult: Decodable {
         struct Properties: Decodable {
             struct Column: Decodable { let name: String }
             let columns: [Column]
             let rows: [[CostValue]]
+            let nextLink: String?
         }
         let properties: Properties
     }
@@ -543,32 +594,72 @@ public struct AzureCostClient {
         var text: String { switch self { case .number(let value): return String(value); case .text(let value): return value } }
     }
 
+    /// Sums this month's cost per currency and service. Daily rows (with UsageDate) before this month
+    /// only feed the spike check.
     public static func decode(_ results: [(String, Data)], now: Date = .now) throws -> BalanceSnapshot {
         var totals: [String: Decimal] = [:]
         var services: [String: [String: Decimal]] = [:]
+        var daily: [String: [String: [String: Decimal]]] = [:] // currency -> service -> day -> cost
+        let monthStart = String(Self.day.string(from: now).prefix(7)) + "-01"
         for (_, data) in results {
             guard let query = try? JSONDecoder().decode(QueryResult.self, from: data) else { throw ConnectorError.invalidResponse }
             let names = query.properties.columns.map(\.name)
             guard let cost = names.firstIndex(where: { $0 == "Cost" || $0 == "PreTaxCost" || $0 == "CostUSD" }),
                   let currency = names.firstIndex(of: "Currency") else { throw ConnectorError.invalidResponse }
             let service = names.firstIndex(of: "ServiceName")
-            for row in query.properties.rows where row.count > max(cost, currency) {
+            let usageDate = names.firstIndex(of: "UsageDate")
+            for row in query.properties.rows where row.count > max(cost, currency, service ?? 0, usageDate ?? 0) {
                 guard let value = row[cost].number, value.isFinite else { continue }
                 let code = row[currency].text.uppercased()
                 guard Money.validCurrency(code) else { throw ConnectorError.invalidResponse }
                 let amount = Decimal(string: String(format: "%.6f", value)) ?? Decimal(value)
+                let name = service.map { row[$0].text.isEmpty ? "Other" : row[$0].text } ?? "Other"
+                if let usageDate {
+                    guard let day = Self.usageDay(row[usageDate]) else { continue }
+                    daily[code, default: [:]][name, default: [:]][day, default: 0] += amount
+                    if day < monthStart { continue }
+                }
                 totals[code, default: 0] += amount
-                if let service { services[code, default: [:]][row[service].text, default: 0] += amount }
+                if service != nil { services[code, default: [:]][name, default: 0] += amount }
             }
         }
         if totals.isEmpty { totals["USD"] = 0 }
         let primary = totals.max { $0.value < $1.value }!.key
         let top = (services[primary] ?? [:]).sorted { $0.value > $1.value }.prefix(3)
             .map { BalanceDetail($0.key.isEmpty ? "Other" : $0.key, Money($0.value, primary)) }
-        let count = results.count
+        let count = Set(results.map(\.0)).count
+        let anomalies = daily.flatMap { code, byService in
+            let earliest = byService.values.flatMap(\.keys).min()
+            return byService.compactMap { name, days in spike(service: name, days: days, currency: code, now: now, earliest: earliest) }
+        }.sorted { $0.amount.amount > $1.amount.amount }
         return BalanceSnapshot(balances: [], details: Array(top), reportedConsumption: totals.keys.sorted().map { Money(totals[$0]!, $0) },
                                observedAt: now, source: source,
                                coverage: "Month-to-date actual cost from Azure Cost Management for \(count) enabled subscription\(count == 1 ? "" : "s"), read through the Azure CLI. Costs can lag by several hours and exclude credits, invoices and taxes.",
-                               consumptionPeriod: "This month")
+                               consumptionPeriod: "This month", anomalies: daily.isEmpty ? nil : anomalies)
+    }
+
+    static func usageDay(_ value: CostValue) -> String? {
+        let digits = value.number.map { String(Int($0)) } ?? value.text.filter(\.isNumber)
+        guard digits.count >= 8 else { return nil }
+        let text = String(digits.prefix(8))
+        return "\(text.prefix(4))-\(text.dropFirst(4).prefix(2))-\(text.dropFirst(6).prefix(2))"
+    }
+
+    /// The most recent complete day (before today, within the last three days) against the median of the
+    /// seven days before it. A spike is at least double the usual and at least 1.00 more. A service that cost
+    /// nothing that week but at least 1.00 now is new spend, flagged only when the account has older history.
+    static func spike(service: String, days: [String: Decimal], currency: String, now: Date, earliest: String?) -> CostAnomaly? {
+        let today = Self.day.string(from: now), recent = Self.day.string(from: now.addingTimeInterval(-3 * 86400))
+        guard let latest = days.keys.filter({ $0 < today }).max(), latest >= recent, let amount = days[latest], amount >= 1,
+              let latestDate = Self.day.date(from: latest) else { return nil }
+        let prior = (1...7).map { Self.day.string(from: latestDate.addingTimeInterval(-Double($0) * 86400)) }
+        let window = prior.map { days[$0] ?? 0 }.sorted()
+        let median = window[3]
+        if window.allSatisfy({ $0 == 0 }) {
+            guard let earliest, earliest <= prior.last! else { return nil }
+            return CostAnomaly(service: service, day: latest, amount: Money(amount.rounded2, currency), typical: Money(0, currency))
+        }
+        guard amount >= median * 2, amount - median >= 1 else { return nil }
+        return CostAnomaly(service: service, day: latest, amount: Money(amount.rounded2, currency), typical: Money(median.rounded2, currency))
     }
 }

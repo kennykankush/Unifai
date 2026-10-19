@@ -13,22 +13,33 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var rates: RateTable?
     @Published public private(set) var refreshingRates = false
     public typealias RateLoader = ([String], Date, Date) async throws -> RateTable
+    public typealias StatusLoader = (StatusFeed) async throws -> Data
+    public typealias PostLoader = (_ token: String, _ handle: String, _ userID: String?, _ sinceID: String?) async throws -> XClient.Result
     private let rateLoader: RateLoader
+    let statusLoader: StatusLoader
+    let postLoader: PostLoader
+    @Published public internal(set) var refreshingTimeline = false
+    @Published public internal(set) var hasXToken = false
+    @Published public internal(set) var timelineErrors: [String: String] = [:]
     public let repository: StateRepository
-    private let vault: CredentialVault
+    let vault: CredentialVault
     private let balances: BalanceLoader
     private let releases: ReleaseLoader
 
     public init(repository: StateRepository, vault: CredentialVault = KeychainVault(),
                 balances: @escaping BalanceLoader = { try await BalanceClient().fetch(integrationID: $0, credential: $1, now: $2) },
                 releases: @escaping ReleaseLoader = { try await GitHubClient().fetch($0, now: $1) },
-                rates rateLoader: @escaping RateLoader = { try await ExchangeRates.fetch(currencies: $0, since: $1, now: $2) }) {
+                rates rateLoader: @escaping RateLoader = { try await ExchangeRates.fetch(currencies: $0, since: $1, now: $2) },
+                status: @escaping StatusLoader = { try await StatusFeedClient().fetch($0) },
+                posts: @escaping PostLoader = { try await XClient().fetch(token: $0, handle: $1, userID: $2, sinceID: $3) }) {
         self.repository = repository; self.vault = vault; self.balances = balances; self.releases = releases; self.rateLoader = rateLoader
+        self.statusLoader = status; self.postLoader = posts
+        self.hasXToken = ((try? vault.read(accountID: Self.xTokenID)) ?? nil) != nil
         self.rates = RateStore(directory: repository.directory).load()
         do { state = try repository.load() }
         catch { loadFailure = "Could not load saved data: \(error.localizedDescription) Restore state.json from a backup, then restart. The original file has been preserved; saving is disabled." }
     }
-    private func change(_ update: (inout PersistentState) throws -> Void) throws {
+    func change(_ update: (inout PersistentState) throws -> Void) throws {
         guard loadFailure == nil else { throw ValidationError.message("Saving is disabled because the saved data could not be loaded.") }
         var next = state
         try update(&next)
@@ -71,6 +82,7 @@ public final class AppStore: ObservableObject {
             if storesCredential { try? vault.delete(accountID: account.id) }
             throw error
         }
+        followWalletRepositories()
     }
     public func updateAccount(_ id: UUID, label: String, credential: String) throws {
         guard let account = state.accounts.first(where: { $0.id == id }), !refreshingAccounts.contains(id), loadFailure == nil else {
@@ -330,7 +342,10 @@ public final class AppStore: ObservableObject {
             let snapshot = try await balances(account.integrationID, credential, now)
             try change { next in
                 guard let current = next.accounts.firstIndex(where: { $0.id == id }) else { return }
+                let previous = next.accounts[current].snapshot
                 next.accounts[current].snapshot = snapshot; next.accounts[current].lastError = nil
+                next.record(AllowanceWatch.events(old: previous, new: snapshot, account: next.accounts[current], now: now)
+                    + Self.anomalyEvents(snapshot, account: next.accounts[current], now: now))
             }
         } catch {
             // Never persist a response body, request headers or credential in errors.
@@ -371,7 +386,10 @@ public final class AppStore: ObservableObject {
             let result = try await releases(state.repositories[index], now)
             try change { next in
                 guard let current = next.repositories.firstIndex(where: { $0.id == id }) else { return }
-                if let items = result.releases { next.repositories[current].releases = items }
+                if let items = result.releases {
+                    next.repositories[current].releases = items
+                    next.record(Self.releaseEvents(items, repository: next.repositories[current], accounts: next.accounts, now: now))
+                }
                 next.repositories[current].etag = result.etag
                 next.repositories[current].lastSuccess = now
                 next.repositories[current].lastError = nil
@@ -387,6 +405,16 @@ public final class AppStore: ObservableObject {
             } catch { notice = "Could not save release status: \(error.localizedDescription)" }
         }
     }
+    static func anomalyEvents(_ snapshot: BalanceSnapshot, account: ConnectedAccount, now: Date) -> [TimelineEvent] {
+        let name = Catalogue.integration(account.integrationID)?.name ?? account.label
+        return (snapshot.anomalies ?? []).map { spike in
+            TimelineEvent(id: "anomaly-\(account.id)-\(spike.service)-\(spike.day)", date: now, kind: .anomaly,
+                          title: spike.typical.amount == 0 ? "\(name): new spend on \(spike.service)" : "\(name): \(spike.service) cost jumped",
+                          detail: spike.summary + ". Check for a resource left running.", source: snapshot.source,
+                          sourceName: name, accountID: account.id, important: true)
+        }
+    }
+
     private static func safeError(_ error: Error) -> String {
         if let known = error as? ConnectorError { return known.localizedDescription }
         if error is URLError { return "The network request failed. Check your connection and try again. The last successful reading is preserved." }

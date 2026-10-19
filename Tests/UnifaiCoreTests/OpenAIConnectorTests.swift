@@ -52,7 +52,7 @@ final class OpenAIConnectorTests: XCTestCase {
         let snapshot = try await CodexClient().fetch()
         XCTAssertNotNil(snapshot.plan)
         XCTAssertFalse(snapshot.allowances?.isEmpty ?? true)
-        print("Codex live read: \(snapshot.plan ?? "-"), windows \(snapshot.allowances?.map { "\($0.name) \($0.usedPercent)%" } ?? []), credits \(snapshot.balances.map(\.plainText))")
+        print("Codex live read: \(snapshot.plan ?? "-"), windows \(snapshot.allowances?.map { "\($0.name) \($0.usedPercent)%" } ?? []), credits \(snapshot.balances.map(\.plainText)), free resets \(snapshot.resetCredits?.map(\.title) ?? []), usage days \(snapshot.usageDays?.count ?? 0), last \(snapshot.usageDays?.suffix(3).map { "\($0.date)=\($0.tokens)" } ?? [])")
     }
 }
 

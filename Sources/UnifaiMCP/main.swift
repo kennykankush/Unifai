@@ -5,7 +5,7 @@ import UnifaiCore
 // Read-only. Each call re-reads state.json, so answers follow the app's latest saved readings.
 // It never opens Keychain, never makes network requests and never writes.
 
-let serverVersion = "0.1.0"
+let serverVersion = "0.2.0"
 let supportedProtocols = ["2025-06-18", "2025-03-26", "2024-11-05"]
 
 func dataDirectory() -> URL {
@@ -66,6 +66,28 @@ let tools: [[String: Any]] = [
             "additionalProperties": false
         ],
         "annotations": ["readOnlyHint": true, "openWorldHint": false]
+    ],
+    [
+        "name": "get_headroom",
+        "title": "Where there is capacity now",
+        "description": "Call before heavy or long-running work to pick a provider. Ranks the user's live wallets by usable capacity right now: plan allowances with room (Codex 5-hour and weekly windows, with reset times and free resets), prepaid credit (OpenRouter, DeepSeek), then pay-as-you-go accounts that bill per use (Azure, OpenAI API), with the monthly budget. Returns a one-line recommendation first.",
+        "inputSchema": ["type": "object", "properties": [String: Any](), "additionalProperties": false],
+        "annotations": ["readOnlyHint": true, "openWorldHint": false]
+    ],
+    [
+        "name": "get_timeline",
+        "title": "What changed",
+        "description": "Recent events for the user's AI accounts and providers, newest first: usage limits reached, scheduled and early resets (for example when OpenAI resets Codex limits for everyone), free resets granted, cost spikes on cloud services, provider status incidents, releases of tools they use and posts from followed X accounts.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "kinds": ["type": "array", "items": ["type": "string", "enum": TimelineKind.allCases.map { $0.rawValue.lowercased() }], "description": "Optional. Only these kinds."],
+                "since": ["type": "string", "description": "Optional ISO 8601 date (YYYY-MM-DD)."],
+                "limit": ["type": "integer", "minimum": 0, "maximum": 200, "description": "Maximum events. Default 30."]
+            ],
+            "additionalProperties": false
+        ],
+        "annotations": ["readOnlyHint": true, "openWorldHint": false]
     ]
 ]
 
@@ -96,6 +118,17 @@ func callTool(_ name: String, _ arguments: [String: Any]) throws -> Data {
         return try encoder.encode(AgentReport.spending(state, since: since, limit: limit, rates: RateStore(directory: repository.directory).load()))
     case "get_renewals":
         return try encoder.encode(AgentReport.renewals(state, withinDays: (arguments["within_days"] as? NSNumber)?.intValue))
+    case "get_headroom":
+        return try encoder.encode(AgentReport.headroom(state, rates: RateStore(directory: repository.directory).load()))
+    case "get_timeline":
+        var since: Date?
+        if let text = arguments["since"] as? String {
+            guard let date = parseDate(text) else { throw ToolError(message: "since must be a date like 2026-10-01.") }
+            since = date
+        }
+        let kinds = (arguments["kinds"] as? [String]).map { Set($0.map { $0.lowercased() }) }
+        let limit = min(200, max(0, (arguments["limit"] as? NSNumber)?.intValue ?? 30))
+        return try encoder.encode(AgentReport.timeline(state, kinds: kinds, since: since, limit: limit))
     default:
         throw ToolError(message: "Unknown tool: \(name)")
     }
@@ -121,7 +154,7 @@ func handle(_ message: [String: Any]) {
             "protocolVersion": supportedProtocols.contains(requested) ? requested : supportedProtocols[0],
             "capabilities": ["tools": ["listChanged": false]],
             "serverInfo": ["name": "unifai", "title": "Unifai", "version": serverVersion],
-            "instructions": "Read-only access to the user's AI account balances, recorded payments and subscription renewals from the Unifai Mac app. Call get_overview first. Readings are only as fresh as the app's last refresh; check observedAt and stale. Never add credit remaining, money paid and expected renewals together, and never combine currencies."
+            "instructions": "Read-only access to the user's AI account balances, recorded payments and subscription renewals from the Unifai Mac app. Call get_overview first, get_headroom before heavy work, get_timeline for what changed (resets, limits, cost spikes, outages, releases). Readings are only as fresh as the app's last refresh; check observedAt and stale. Never add credit remaining, money paid and expected renewals together, and never combine currencies."
         ])
     case "ping":
         reply(id, result: [:])

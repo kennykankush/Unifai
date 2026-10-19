@@ -279,6 +279,9 @@ struct SettingsEditor: View {
     @State private var budgetCurrency = ""
     @State private var autoRefresh = true
     @State private var notifications = true
+    @State private var xToken = ""
+    @State private var removeXToken = false
+    @State private var xHandles = ""
     @State private var error: String?
     private var currencies: [String] {
         let recorded = Set(store.state.payments.map(\.money.currency))
@@ -299,7 +302,22 @@ struct SettingsEditor: View {
             Section {
                 Toggle("Refresh wallets in the background every hour", isOn: $autoRefresh)
                 Toggle("Notifications", isOn: $notifications)
-            } header: { Text("Automation") } footer: { Text("Notifications cover low credit, failed refreshes, renewals due tomorrow, recorded renewals, usage limits resetting and your budget. Everything is computed on this Mac.") }
+            } header: { Text("Automation") } footer: { Text("Notifications cover low credit, failed refreshes, renewals due tomorrow, recorded renewals, usage limits resetting, early resets, free resets, cost spikes and your budget. Everything is computed on this Mac.") }
+            Section {
+                TextField("Accounts to follow", text: $xHandles, prompt: Text("thsottiaux, OpenAIDevs"))
+                if store.hasXToken && !removeXToken {
+                    HStack {
+                        Text("Bearer token saved in Keychain").foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove") { removeXToken = true }
+                    }
+                } else {
+                    SecureField("Bearer token", text: $xToken, prompt: Text("From your X developer app"))
+                }
+                LabeledContent("Estimated X API cost this month", value: store.xCost().plainText)
+            } header: { Text("Posts on X") } footer: {
+                Text("Optional. Shows posts from these accounts in the Timeline, such as announcements of limit resets, checked every 30 minutes. X bills your developer account about US$0.005 per post read and US$0.01 per account lookup; Unifai only asks for posts newer than the last one it saw. [Get a token](https://console.x.com)")
+            }
         }
         .onAppear {
             displayCurrency = store.state.displayCurrency ?? ""
@@ -307,6 +325,7 @@ struct SettingsEditor: View {
             budgetCurrency = store.state.monthlyBudget?.currency ?? store.state.displayCurrency ?? Locale.current.currency?.identifier ?? "USD"
             autoRefresh = store.state.autoRefresh != false
             notifications = Notifier.shared.enabled
+            xHandles = (store.state.xHandles ?? []).joined(separator: ", ")
         }
     }
     private func save() {
@@ -318,6 +337,9 @@ struct SettingsEditor: View {
                 try store.setMonthlyBudget(Money(amount, budgetCurrency))
             }
             try store.setAutoRefresh(autoRefresh)
+            try store.setXHandles(xHandles)
+            if removeXToken { try store.setXToken(nil) }
+            else if !xToken.trimmingCharacters(in: .whitespaces).isEmpty { try store.setXToken(xToken) }
             Notifier.shared.enabled = notifications
             let target = displayCurrency.isEmpty ? nil : displayCurrency
             if target != store.state.displayCurrency { Task { await store.setDisplayCurrency(target) } }

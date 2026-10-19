@@ -72,7 +72,7 @@ final class CloudAndBudgetTests: XCTestCase {
         let snapshot: BalanceSnapshot
         do { snapshot = try await AzureCostClient().fetch() }
         catch ConnectorError.rateLimited { throw XCTSkip("Azure Cost Management is throttling this subscription; try again in a minute.") }
-        print("Azure live: \(snapshot.reportedConsumption.map { "\($0.amount) \($0.currency)" }), top \(snapshot.details.map(\.label))")
+        print("Azure live: \(snapshot.reportedConsumption.map { "\($0.amount) \($0.currency)" }), top \(snapshot.details.map(\.label)), spikes \(snapshot.anomalies?.map(\.summary) ?? ["none"])")
         XCTAssertFalse(snapshot.reportedConsumption.isEmpty)
     }
 }

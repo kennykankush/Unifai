@@ -64,6 +64,57 @@ enum FixtureWorkspace {
             }
         }
         for account in store.state.accounts where account.mode == .live { try vault.write("fixture-valid", accountID: account.id) }
+        // Synthetic timeline: what the app records when a reset or limit happens between two readings.
+        if store.state.events?.contains(where: { $0.id.hasPrefix("fixture-") }) != true,
+           let codex = store.state.accounts.first(where: { $0.integrationID == "codex" }) {
+            let hour: TimeInterval = 3600
+            try store.recordEvents([
+                TimelineEvent(id: "fixture-early", date: .now.addingTimeInterval(-2 * hour), kind: .earlyReset,
+                              title: "ChatGPT & Codex: weekly window was reset early",
+                              detail: "Usage went from 100% to 0%. The scheduled reset was in 3 days.", sourceName: "ChatGPT & Codex", accountID: codex.id, important: true),
+                TimelineEvent(id: "fixture-limit", date: .now.addingTimeInterval(-26 * hour), kind: .limitReached,
+                              title: "ChatGPT & Codex: weekly window limit reached", detail: "You have used 100% of this window.",
+                              sourceName: "ChatGPT & Codex", accountID: codex.id, important: true),
+                TimelineEvent(id: "fixture-limit-2", date: .now.addingTimeInterval(-9 * 24 * hour), kind: .limitReached,
+                              title: "ChatGPT & Codex: weekly window limit reached", detail: "You have used 100% of this window.",
+                              sourceName: "ChatGPT & Codex", accountID: codex.id, important: true),
+            ])
+        }
+        if !store.hasXToken {
+            try store.setXToken("fixture-x-token")
+            try store.setXHandles("thsottiaux")
+        }
+    }
+
+    /// Synthetic status pages: one ongoing incident and one resolved.
+    static func status(_ feed: StatusFeed) async throws -> Data {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let recent = formatter.string(from: .now.addingTimeInterval(-3 * 3600)), older = formatter.string(from: .now.addingTimeInterval(-50 * 3600))
+        let items: String
+        switch feed.id {
+        case "openai":
+            items = """
+            <item><title>Elevated errors for Codex cloud tasks</title><link>https://status.openai.com/</link><guid>fixture-openai-1</guid><pubDate>\(recent)</pubDate>
+            <description><![CDATA[<b>Status: Identified</b><br/>We are seeing elevated errors starting Codex cloud tasks and are applying a fix.]]></description></item>
+            """
+        case "anthropic":
+            items = """
+            <item><title>Slow responses on Claude Opus</title><link>https://status.claude.com/</link><guid>fixture-anthropic-1</guid><pubDate>\(older)</pubDate>
+            <description>&lt;p&gt;&lt;strong&gt;Resolved&lt;/strong&gt; - Response times are back to normal.&lt;/p&gt;</description></item>
+            """
+        default: items = ""
+        }
+        return Data("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Synthetic</title>\(items)</channel></rss>".utf8)
+    }
+
+    /// Synthetic X posts; the demo never contacts X.
+    static func posts(_ token: String, _ handle: String, _ userID: String?, _ sinceID: String?) async throws -> XClient.Result {
+        guard sinceID == nil else { return .init(userID: "100", posts: [], lookups: 0) }
+        return .init(userID: "100", posts: [
+            .init(id: "1900000000000000002", text: "We just reset Codex rate limits for everyone on Plus and Pro. Enjoy, and keep the feedback coming.", date: .now.addingTimeInterval(-2.2 * 3600)),
+            .init(id: "1900000000000000001", text: "Codex app update is rolling out today with faster cloud tasks.", date: .now.addingTimeInterval(-30.0 * 3600)),
+        ], lookups: 1)
     }
     static func balance(_ integration: String, _ credential: String, _ now: Date) async throws -> BalanceSnapshot {
         if credential == "fixture-unauthorized" { throw ConnectorError.authorization }
@@ -71,12 +122,28 @@ enum FixtureWorkspace {
         if integration == "codex" {
             let account = Data(#"{"account":{"type":"chatgpt","email":null,"planType":"plus"},"requiresOpenaiAuth":true}"#.utf8)
             let fiveHour = Int(now.addingTimeInterval(3 * 3600 + 1200).timeIntervalSince1970), weekly = Int(now.addingTimeInterval(3 * 86400 + 7200).timeIntervalSince1970)
-            let limits = Data("{\"rateLimits\":{\"limitId\":\"codex\",\"planType\":\"plus\",\"primary\":{\"usedPercent\":42,\"windowDurationMins\":300,\"resetsAt\":\(fiveHour)},\"secondary\":{\"usedPercent\":68,\"windowDurationMins\":10080,\"resetsAt\":\(weekly)},\"credits\":{\"hasCredits\":true,\"unlimited\":false,\"balance\":\"120.50\"}}}".utf8)
-            return try CodexClient.decode(account: account, limits: limits, now: now)
+            let granted = Int(now.addingTimeInterval(-86400).timeIntervalSince1970), expires = Int(now.addingTimeInterval(29 * 86400).timeIntervalSince1970)
+            let limits = Data("{\"rateLimits\":{\"limitId\":\"codex\",\"planType\":\"plus\",\"primary\":{\"usedPercent\":42,\"windowDurationMins\":300,\"resetsAt\":\(fiveHour)},\"secondary\":{\"usedPercent\":68,\"windowDurationMins\":10080,\"resetsAt\":\(weekly)},\"credits\":{\"hasCredits\":true,\"unlimited\":false,\"balance\":\"120.50\"}},\"rateLimitResetCredits\":{\"availableCount\":1,\"credits\":[{\"id\":\"fixture-credit\",\"resetType\":\"codexRateLimits\",\"status\":\"available\",\"grantedAt\":\(granted),\"expiresAt\":\(expires),\"title\":\"Full reset (Weekly + 5 hr)\"}]}}".utf8)
+            let days = (0..<30).map { offset -> String in
+                let date = RateTable.dayFormatter.string(from: now.addingTimeInterval(Double(offset - 29) * 86400))
+                return "{\"startDate\":\"\(date)\",\"tokens\":\([0, 1_200_000, 8_400_000, 3_100_000, 0, 12_800_000][offset % 6])}"
+            }
+            let usage = Data("{\"dailyUsageBuckets\":[\(days.joined(separator: ","))],\"summary\":{\"lifetimeTokens\":412000000}}".utf8)
+            return try CodexClient.decode(account: account, limits: limits, usage: usage, now: now)
         }
         if integration == "azure-subscription" {
-            let rows = #"[[8.36,"Virtual Machines","USD"],[7.11,"Foundry Models","USD"],[1.05,"Storage","USD"],[0.63,"Virtual Network","USD"]]"#
-            let body = #"{"properties":{"columns":[{"name":"Cost"},{"name":"ServiceName"},{"name":"Currency"}],"rows":"# + rows + "}}"
+            // 35 days of daily costs; Virtual Machines jumps yesterday, like a GPU VM left running.
+            let utc = DateFormatter()
+            utc.locale = Locale(identifier: "en_US_POSIX"); utc.timeZone = TimeZone(identifier: "UTC"); utc.dateFormat = "yyyyMMdd"
+            var rows: [String] = []
+            for offset in 0...35 {
+                let day = utc.string(from: now.addingTimeInterval(Double(offset - 35) * 86400))
+                let vm = offset == 34 ? 6.42 : 0.28, foundry = [0.18, 0.31, 0.0, 0.44][offset % 4]
+                rows.append("[\(vm),\(day),\"Virtual Machines\",\"USD\"]")
+                rows.append("[\(foundry),\(day),\"Foundry Models\",\"USD\"]")
+                rows.append("[0.04,\(day),\"Storage\",\"USD\"]")
+            }
+            let body = #"{"properties":{"columns":[{"name":"Cost"},{"name":"UsageDate"},{"name":"ServiceName"},{"name":"Currency"}],"rows":["# + rows.joined(separator: ",") + "]}}"
             return try AzureCostClient.decode([("Synthetic subscription", Data(body.utf8))], now: now)
         }
         if integration == "claude-subscription" {
@@ -119,7 +186,14 @@ enum FixtureWorkspace {
     }
 
     static func releases(_ repository: WatchedRepository, _ now: Date) async throws -> GitHubFetchResult {
-        let data = Data(#"[{"id":123456789,"name":"Synthetic release","tag_name":"v1.0.0","html_url":"https://github.com/example/ai-hub/releases/tag/v1.0.0","published_at":"2026-10-17T08:00:00Z","prerelease":false,"draft":false},{"id":123456790,"name":"Synthetic preview","tag_name":"v1.1.0-beta","html_url":"https://github.com/example/ai-hub/releases/tag/v1.1.0-beta","published_at":"2026-10-18T08:00:00Z","prerelease":true,"draft":false}]"#.utf8)
+        let iso = ISO8601DateFormatter()
+        let slug = repository.slug, seed = abs(slug.hashValue % 1000) * 10
+        let first = iso.string(from: now.addingTimeInterval(-20 * 3600)), second = iso.string(from: now.addingTimeInterval(-4 * 86400))
+        let notes = slug.contains("codex") ? "## Highlights\\n- Faster cloud tasks\\n- Shows remaining usage in the status line" : "- Synthetic release notes"
+        let data = Data("""
+        [{"id":\(seed + 1),"name":"Synthetic release","tag_name":"v1.\(seed % 7).0","html_url":"https://github.com/\(slug)/releases","published_at":"\(first)","prerelease":false,"draft":false,"body":"\(notes)"},
+         {"id":\(seed + 2),"name":"Synthetic preview","tag_name":"v1.\(seed % 7).1-beta","html_url":"https://github.com/\(slug)/releases","published_at":"\(second)","prerelease":true,"draft":false}]
+        """.utf8)
         return .init(releases: try GitHubClient.decode(data), etag: "fixture-etag", retryAfter: now.addingTimeInterval(1800))
     }
 }

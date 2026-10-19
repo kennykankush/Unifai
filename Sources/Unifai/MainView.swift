@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import UnifaiCore
 
 enum Destination: String, CaseIterable, Identifiable {
-    case today = "Today", accounts = "Accounts", payments = "Payments", subscriptions = "Subscriptions", releases = "Releases", catalogue = "Catalogue"
+    case today = "Today", accounts = "Accounts", payments = "Payments", subscriptions = "Subscriptions", timeline = "Timeline", catalogue = "Catalogue"
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -19,7 +19,7 @@ enum Destination: String, CaseIterable, Identifiable {
         case .accounts: return "wallet.pass.fill"
         case .payments: return "arrow.left.arrow.right"
         case .subscriptions: return "calendar"
-        case .releases: return "shippingbox.fill"
+        case .timeline: return "waveform.path.ecg"
         case .catalogue: return "square.stack.3d.up.fill"
         }
     }
@@ -53,6 +53,9 @@ struct MainView: View {
     @State private var copiedSetup = false
     @State private var signingIn: Set<UUID> = []
     @State private var infoAccount: UUID?
+    @State private var timelineFilter = "All"
+    @State private var paymentFilter = "All"
+    @State private var copiedRequest = false
     @FocusState private var searchFocused: Bool
     @State private var searchActive = false
     @Namespace private var navNamespace
@@ -87,6 +90,9 @@ struct MainView: View {
                 announce(store.closePayAsYouGoPeriods())
                 await store.refreshRatesIfNeeded()
                 await store.refreshStaleAccounts()
+                store.followWalletRepositories()
+                await store.refreshDueRepositories()
+                await store.refreshTimeline()
                 Notifier.shared.evaluate(store)
                 try? await Task.sleep(for: .seconds(1800))
             }
@@ -126,7 +132,7 @@ struct MainView: View {
         case .payments: payments
         case .subscriptions: subscriptions
         case .catalogue: catalogue
-        case .releases: releases
+        case .timeline: timeline
         }
     }
 
@@ -199,6 +205,7 @@ struct MainView: View {
         switch item {
         case .accounts: return store.state.accounts.contains(where: needsAttention) ? Palette.warning : nil
         case .subscriptions: return store.state.subscriptions.contains { daysUntil($0.nextRenewal) <= 7 } ? Palette.lime : nil
+        case .timeline: return (store.state.events ?? []).contains { $0.important && $0.kind != .release && $0.date > .now.addingTimeInterval(-86400) } ? Palette.lime : nil
         default: return nil
         }
     }
@@ -282,7 +289,7 @@ struct MainView: View {
     private var searchPrompt: String {
         switch destination {
         case .catalogue: return "Search services"
-        case .releases: return "Search releases"
+        case .timeline: return "Search timeline"
         case .payments: return "Search payments"
         default: return "Search"
         }
@@ -391,7 +398,7 @@ struct MainView: View {
         case .subscriptions:
             Button { editor = .subscription(nil) } label: { Label("Add Subscription", systemImage: "plus") }
                 .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
-        case .releases:
+        case .timeline:
             Button { editor = .repository } label: { Label("Follow Repository", systemImage: "plus") }
                 .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
         case .catalogue:
@@ -484,7 +491,7 @@ struct MainView: View {
                 transactionsPanel
                 spendingPanel.frame(width: 300)
             }
-            if !recentReleases(limit: 1).isEmpty { releasesStrip }
+            if !(store.state.events ?? []).isEmpty { whatChangedStrip }
         }
     }
 
@@ -740,6 +747,10 @@ struct MainView: View {
                 }
             }
             if actions {
+                if record.autoRecorded {
+                    Button { perform { try store.confirmPayment(record.id) } } label: { Image(systemName: "checkmark") }
+                        .buttonStyle(IconButtonStyle()).help("Confirm: the charge matches your receipt").accessibilityLabel("Confirm \(record.description)")
+                }
                 Button { editor = .payment(record) } label: { Image(systemName: "pencil") }
                     .buttonStyle(IconButtonStyle()).help("Edit").accessibilityLabel("Edit \(record.description)")
                 Button { removal = .init(title: "Remove Payment?", action: { try store.removePayment(record.id) }) } label: { Image(systemName: "trash") }
@@ -771,30 +782,29 @@ struct MainView: View {
         .surface(padding: 20, radius: 22)
     }
 
-    private var releasesStrip: some View {
+    /// Important events from the last week first, then the most recent.
+    private var highlightEvents: [TimelineEvent] {
+        let events = store.state.events ?? []
+        let week = events.filter { $0.important && $0.date > .now.addingTimeInterval(-7 * 86400) }
+        return Array((week + events.filter { !week.contains($0) }).prefix(3))
+    }
+
+    private var whatChangedStrip: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeading(title: "Latest Releases") { SeeAllButton { destination = .releases } }
-            HStack(spacing: 14) {
-                ForEach(recentReleases(limit: 3)) { entry in
-                    Link(destination: entry.item.url) {
-                        HStack(spacing: 12) {
-                            LogoCircle(integrationID: "github-releases", size: 38)
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(entry.item.tag).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Palette.hex(0x15161B))
-                                        .padding(.horizontal, 6).frame(height: 18).background(Capsule().fill(Palette.lime))
-                                    if entry.item.prerelease { Chip(text: "Pre", tint: Palette.warning) }
-                                }
-                                Text(entry.item.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                                Text(entry.repo.slug).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            Spacer(minLength: 0)
+            SectionHeading(title: "What Changed") { SeeAllButton { destination = .timeline } }
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(highlightEvents) { event in
+                    Group {
+                        if let source = event.source {
+                            Link(destination: source) { EventCard(event: event, integrationID: account(event.accountID)?.integrationID) }.buttonStyle(.plain)
+                        } else {
+                            EventCard(event: event, integrationID: account(event.accountID)?.integrationID)
+                                .onTapGesture { destination = .timeline }
                         }
-                        .surface(padding: 14, radius: 18)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
                 }
+                ForEach(0..<max(0, 3 - highlightEvents.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
             }
         }
     }
@@ -837,7 +847,15 @@ struct MainView: View {
             rows.append(TileRow(label: window.name, value: "\(window.usedPercent)% used\(reset)",
                                 tint: window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : .primary))
         }
-        if let plan = snapshot.plan { rows.append(TileRow(label: "Plan", value: plan)) }
+        if let credits = snapshot.resetCredits, !credits.isEmpty {
+            let expiry = credits.compactMap(\.expiresAt).min().map { " · expires \($0.formatted(.dateTime.month(.abbreviated).day()))" } ?? ""
+            rows.append(TileRow(label: "Free resets", value: "\(credits.count) available\(expiry)", tint: Palette.positive))
+        }
+        if let spike = snapshot.anomalies?.first {
+            rows.append(TileRow(label: "Cost spike", value: "\(spike.service) \(spike.amount.plainText)/day", tint: Palette.warning))
+        }
+        // The card already shows the plan; repeat it only when there is nothing else to say.
+        if let plan = snapshot.plan, rows.isEmpty { rows.append(TileRow(label: "Plan", value: plan)) }
         rows += snapshot.details.map { TileRow(label: $0.label, value: $0.value.plainText) }
         let period = snapshot.consumptionPeriod.map { " (\($0.lowercased()))" } ?? ""
         rows += snapshot.reportedConsumption.map { TileRow(label: "Reported consumption\(period)", value: $0.plainText) }
@@ -875,7 +893,8 @@ struct MainView: View {
                     Button { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } } label: { Label("Edit", systemImage: "pencil") }
                         .buttonStyle(PillButtonStyle(compact: true))
                     Spacer()
-                    if let billing = Catalogue.integration(account.integrationID)?.billing {
+                    // No room for the label beside Sign In; the card already says what the wallet is.
+                    if !SignIn.supports(account.integrationID), let billing = Catalogue.integration(account.integrationID)?.billing {
                         Text(billing.rawValue).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     moreMenu("Options for \(account.label)") { walletMenuItems(account) }
@@ -924,7 +943,8 @@ struct MainView: View {
     private var payments: some View {
         let currency = activeCurrency
         let month = SpendSeries.paidThisMonth(spendPayments, currency: currency)
-        let items = store.state.payments.filter { matches($0.description, $0.reference, accountName($0.accountID), $0.money.currency) }.sorted { $0.paidAt > $1.paidAt }
+        let unconfirmed = store.unconfirmedPayments
+        let items = store.state.payments.filter { (paymentFilter == "All" || $0.autoRecorded) && matches($0.description, $0.reference, accountName($0.accountID), $0.money.currency) }.sorted { $0.paidAt > $1.paidAt }
         return VStack(alignment: .leading, spacing: 18) {
             pageHeader("Payments", combining ? "Settled charges and refunds from receipts. Shown in \(store.state.displayCurrency!); each payment keeps its recorded currency." : "Settled charges and refunds from receipts. Amounts stay grouped by currency.",
                        chip: month > 0 ? Chip(text: "+\(Money(Decimal(month), currency).amountText) \(currency) this month", tint: Palette.lime, symbol: "arrow.up.right", filled: true) : nil)
@@ -974,12 +994,19 @@ struct MainView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 SectionHeading(title: "History", subtitle: "\(items.count) record\(items.count == 1 ? "" : "s")") {
+                    if !unconfirmed.isEmpty || paymentFilter != "All" {
+                        SegmentedPills(options: ["All", "Unconfirmed"], selection: $paymentFilter) { $0 == "All" ? "All" : "Unconfirmed \(unconfirmed.count)" }
+                    }
                     Button(action: importPayments) { Label("Import CSV", systemImage: "square.and.arrow.down") }
                         .buttonStyle(PillButtonStyle(compact: true))
                         .help("Import confirmed payments from a CSV file: date, description, amount, currency, kind, account, account_label, reference")
                 }
                 .padding(.bottom, 10)
-                if items.isEmpty { emptyState("No matching payments", "Add a confirmed payment to begin your recorded history.", "creditcard") }
+                if !unconfirmed.isEmpty { closeMonthBanner(unconfirmed).padding(.bottom, 10) }
+                if items.isEmpty {
+                    if paymentFilter == "All" { emptyState("No matching payments", "Add a confirmed payment to begin your recorded history.", "creditcard") }
+                    else { emptyState("All confirmed", "Every payment is backed by a receipt or confirmed by you.", "checkmark.seal") }
+                }
                 let groups = Dictionary(grouping: items) { Calendar.current.dateInterval(of: .month, for: $0.paidAt)?.start ?? $0.paidAt }
                 ForEach(groups.keys.sorted(by: >), id: \.self) { month in
                     Text(month.formatted(.dateTime.month(.wide).year()).uppercased())
@@ -992,6 +1019,35 @@ struct MainView: View {
             }
             .surface(padding: 20, radius: 22)
         }
+    }
+
+    /// Auto renewals and usage estimates waiting for receipts, with a prompt an agent can act on.
+    private func closeMonthBanner(_ records: [PaymentRecord]) -> some View {
+        let total = Ledger.paidTotals(records).map(\.plainText).joined(separator: " + ")
+        return HStack(spacing: 14) {
+            Image(systemName: "checklist").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accentInk)
+                .frame(width: 40, height: 40).background(Circle().fill(Palette.accent.opacity(0.14)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Close the books").font(.system(size: 14, weight: .bold))
+                Text("\(records.count) entr\(records.count == 1 ? "y" : "ies") (\(total)) are Auto or Estimate. Copy a request for an agent with mail access, then import the CSV it returns.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(store.state.receiptRequest(for: records), forType: .string)
+                copiedRequest = true
+                Task { try? await Task.sleep(for: .seconds(2)); copiedRequest = false }
+            } label: { Label(copiedRequest ? "Copied" : "Copy Receipt Request", systemImage: copiedRequest ? "checkmark" : "doc.on.doc") }
+                .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
+                .help("Copies a prompt listing these entries and the CSV columns Unifai imports")
+            if paymentFilter == "All" {
+                Button("Review") { paymentFilter = "Unconfirmed" }.buttonStyle(PillButtonStyle(compact: true))
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Palette.accent.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Palette.accent.opacity(0.18)))
     }
 
     // MARK: Subscriptions
@@ -1175,84 +1231,172 @@ struct MainView: View {
         .opacity(integration.status == .planned ? 0.72 : 1)
     }
 
-    // MARK: Releases
+    // MARK: Timeline
 
-    private struct ReleaseEntry: Identifiable { let repo: WatchedRepository; let item: ReleaseItem; var id: String { "\(repo.id)-\(item.id)" } }
+    private static let timelineFilters = ["All", "Accounts", "Status", "Releases", "Posts"]
 
-    private func recentReleases(limit: Int) -> [ReleaseEntry] {
-        store.state.repositories.flatMap { repo in store.state.visibleReleases(for: repo).map { ReleaseEntry(repo: repo, item: $0) } }
-            .sorted { ($0.item.publishedAt ?? .distantPast) > ($1.item.publishedAt ?? .distantPast) }
-            .prefix(limit).map { $0 }
+    private func timelineIncludes(_ event: TimelineEvent) -> Bool {
+        switch timelineFilter {
+        case "Accounts": return event.kind.isAccountEvent
+        case "Status": return event.kind == .status
+        case "Releases": return event.kind == .release
+        case "Posts": return event.kind == .post
+        default: return true
+        }
     }
 
-    private var releases: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            pageHeader("Releases", "Latest 50 public releases per repository. Manual refresh, up to every 30 minutes, no sign-in. Up to 10 repositories share a 20-request hourly budget.")
+    private func dayTitle(_ day: Date) -> String {
+        if Calendar.current.isDateInToday(day) { return "Today" }
+        if Calendar.current.isDateInYesterday(day) { return "Yesterday" }
+        return day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+
+    private var planAdvice: [(String, String)] {
+        store.state.accounts.compactMap { account in
+            PlanAdvisor.advice(for: account, events: store.state.events ?? []).map { (integrationName(account), $0) }
+        }
+    }
+
+    private func checkNow() {
+        Task {
+            await store.refreshDueRepositories()
+            await store.refreshTimeline(force: true)
+            for account in store.state.accounts where account.mode == .live && (account.lastAttempt.map { Date.now.timeIntervalSince($0) > 300 } ?? true) {
+                await store.refreshAccount(account.id)
+            }
+        }
+    }
+
+    private var timeline: some View {
+        let events = (store.state.events ?? []).filter { timelineIncludes($0) && matches($0.title, $0.detail, $0.sourceName) }
+        let days = Dictionary(grouping: events) { Calendar.current.startOfDay(for: $0.date) }
+        return VStack(alignment: .leading, spacing: 18) {
+            pageHeader("Timeline", "Resets, limits, cost spikes, outages, releases and posts about the services you pay for.")
                 .padding(.bottom, -18)
-            if store.state.repositories.isEmpty {
-                emptyState("Follow a project", "Add a public repository to see its source-linked releases.", "shippingbox", action: "Follow Repository") { editor = .repository }.surface()
-            }
-            ForEach(store.state.repositories.filter { matches($0.slug) || $0.releases.contains { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.tag.localizedCaseInsensitiveContains(search) } }) { repository in
-                repositoryPanel(repository)
+            HeadroomCard(report: AgentReport.headroom(store.state, rates: store.rates), advice: planAdvice)
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 12) {
+                        SegmentedPills(options: Self.timelineFilters, selection: $timelineFilter) { $0 }
+                        Spacer()
+                        Button(action: checkNow) {
+                            HStack(spacing: 6) {
+                                if store.refreshingTimeline { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+                                Text("Check Now")
+                            }
+                        }
+                        .buttonStyle(PillButtonStyle(compact: true))
+                        .disabled(store.refreshingTimeline || store.loadFailure != nil)
+                    }
+                    .padding(.bottom, 10)
+                    if events.isEmpty {
+                        emptyState(store.state.events?.isEmpty == false ? "Nothing here" : "Quiet so far",
+                                   store.state.events?.isEmpty == false ? "No events match this filter." : "Resets, limits, cost spikes and incidents appear here as Unifai checks your wallets and providers every 30 minutes.",
+                                   "waveform.path.ecg", action: store.state.events?.isEmpty == false ? nil : "Check Now", perform: checkNow)
+                    }
+                    ForEach(days.keys.sorted(by: >), id: \.self) { day in
+                        Text(dayTitle(day).uppercased())
+                            .font(.system(size: 10, weight: .bold)).tracking(1).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+                        ForEach(days[day] ?? []) { event in
+                            EventRow(event: event, integrationID: account(event.accountID)?.integrationID)
+                        }
+                    }
+                }
+                .surface(padding: 20, radius: 22)
+                VStack(spacing: 18) {
+                    statusSources
+                    xSources
+                    repositorySources
+                }
+                .frame(width: 300)
             }
         }
     }
 
-    private func repositoryPanel(_ repository: WatchedRepository) -> some View {
-        let items = store.state.visibleReleases(for: repository).filter { search.isEmpty || repository.slug.localizedCaseInsensitiveContains(search) || $0.title.localizedCaseInsensitiveContains(search) || $0.tag.localizedCaseInsensitiveContains(search) }
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                LogoCircle(integrationID: "github-releases", size: 42)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(repository.slug).font(.system(size: 15, weight: .bold))
-                    Text(repository.lastSuccess.map { "Checked \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Not checked yet")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let date = repository.nextAllowedRefresh, date > .now {
-                    Chip(text: "Next after \(date.formatted(date: .omitted, time: .shortened))", tint: .secondary, symbol: "hourglass")
-                }
-                Toggle("Prereleases", isOn: Binding(get: { repository.includePrereleases }, set: { value in perform { try store.setPrereleases(repository.id, include: value) } }))
-                    .toggleStyle(.switch).controlSize(.mini).font(.system(size: 12, weight: .medium))
-                    .accessibilityLabel("Include Prereleases")
-                Link(destination: URL(string: "https://github.com/\(repository.slug)")!) { Image(systemName: "arrow.up.right") }
-                    .buttonStyle(IconButtonStyle()).help("Open on GitHub")
-                Button { Task { await store.refreshRepository(repository.id) } } label: {
-                    if store.refreshingRepositories.contains(repository.id) { ProgressView().controlSize(.mini) }
-                    else { Image(systemName: "arrow.clockwise") }
-                }
-                .buttonStyle(IconButtonStyle()).help("Refresh releases")
-                .disabled(store.refreshingRepositories.contains(repository.id) || store.loadFailure != nil).accessibilityLabel("Refresh \(repository.slug)")
-                Button { removal = .init(title: "Unfollow \(repository.slug)?", action: { try store.removeRepository(repository.id) }) } label: { Image(systemName: "trash") }
-                    .buttonStyle(IconButtonStyle()).help("Unfollow").accessibilityLabel("Unfollow \(repository.slug)")
+    private func sourceRow<Trailing: View>(_ logo: String?, _ title: String, _ subtitle: String, symbol: String = "sparkles", @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack(spacing: 10) {
+            LogoCircle(integrationID: logo, size: 30, symbol: symbol)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
-            .padding(.bottom, 4)
-            if items.isEmpty {
-                Text(repository.lastSuccess == nil ? "No release reading yet. Refresh to check this repository." : "No matching published releases in the latest 50.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).padding(.vertical, 6)
-            }
-            ForEach(items) { item in
-                Link(destination: item.url) {
-                    HStack(spacing: 12) {
-                        Text(item.tag).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Palette.hex(0x15161B))
-                            .padding(.horizontal, 8).frame(height: 22).background(Capsule().fill(item.prerelease ? Palette.warning : Palette.lime))
-                            .fixedSize()
-                        Text(item.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                        if item.prerelease { Chip(text: "Prerelease", tint: Palette.warning) }
-                        Spacer(minLength: 12)
-                        if let date = item.publishedAt { Text(date.formatted(date: .abbreviated, time: .omitted)).font(.system(size: 12)).foregroundStyle(.secondary) }
-                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 9)
-                    .background(RowHighlight())
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(item.title), \(item.tag)\(item.prerelease ? ", prerelease" : "")")
-            }
-            if let error = repository.lastError { InlineNotice(text: error) }
+            Spacer(minLength: 6)
+            trailing()
         }
-        .surface(padding: 20, radius: 22)
+    }
+
+    private var statusSources: some View {
+        let feeds = StatusFeed.relevant(to: store.state.accounts)
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: "Status Pages", subtitle: feeds.isEmpty ? nil : "\(feeds.count)")
+            if feeds.isEmpty {
+                Text("Connect OpenAI, Claude, Azure or DeepSeek wallets to watch their status pages.").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            ForEach(feeds, id: \.id) { feed in
+                let logo = feed.id == "openai" ? "openai-api" : feed.id == "anthropic" ? "claude-api" : feed.id == "azure" ? "azure-subscription" : "deepseek"
+                let failed = store.timelineErrors[feed.name] != nil
+                sourceRow(logo, feed.name, failed ? "Could not read" : "Incidents from the last 14 days") {
+                    Circle().fill(failed ? Palette.warning : Palette.positive).frame(width: 7, height: 7)
+                }
+            }
+            if let checked = store.state.timelineCheckedAt {
+                Text("Checked \(checked.formatted(.relative(presentation: .named)))").font(.system(size: 11)).foregroundStyle(.tertiary)
+            }
+        }
+        .surface(padding: 18, radius: 22)
+    }
+
+    private var xSources: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: "Posts on X") {
+                if store.hasXToken { Text(store.xCost().plainText + " this month").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary) }
+            }
+            if !store.hasXToken || (store.state.xHandles ?? []).isEmpty {
+                Text(store.hasXToken ? "Add accounts to follow in Settings, such as the people who announce Codex limit resets." : "Follow people who announce limit resets, such as @thsottiaux, with your own X API token. Reads cost about US$0.005 per post.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button { editor = .settings } label: { Label(store.hasXToken ? "Add Accounts" : "Set Up", systemImage: "at") }
+                    .buttonStyle(PillButtonStyle(compact: true))
+            }
+            ForEach(store.hasXToken ? store.state.xHandles ?? [] : [], id: \.self) { handle in
+                let failed = store.timelineErrors["@\(handle)"]
+                HStack(spacing: 10) {
+                    Text("𝕏").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 30, height: 30).background(Circle().fill(Palette.hex(0x15161B)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("@\(handle)").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Text(failed ?? "New posts every 30 minutes").font(.system(size: 11)).foregroundStyle(failed == nil ? Color.secondary : Palette.warning).lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Link(destination: URL(string: "https://x.com/\(handle)")!) { Image(systemName: "arrow.up.right") }.buttonStyle(IconButtonStyle())
+                }
+                .help(failed ?? "")
+            }
+        }
+        .surface(padding: 18, radius: 22)
+    }
+
+    private var repositorySources: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: "Releases", subtitle: store.state.repositories.isEmpty ? nil : "\(store.state.repositories.count)")
+            if store.state.repositories.isEmpty {
+                Text("Follow public GitHub repositories. Codex and Claude Code are followed for you when you add those wallets.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(store.state.repositories) { repository in
+                sourceRow("github-releases", repository.slug,
+                          repository.lastError != nil ? "Could not refresh" : repository.lastSuccess.map { "Checked \($0.formatted(.relative(presentation: .named)))" } ?? "Not checked yet") {
+                    Link(destination: URL(string: "https://github.com/\(repository.slug)")!) { Image(systemName: "arrow.up.right") }
+                        .buttonStyle(IconButtonStyle()).help("Open on GitHub")
+                    Button { removal = .init(title: "Unfollow \(repository.slug)?", action: { try store.removeRepository(repository.id) }) } label: { Image(systemName: "trash") }
+                        .buttonStyle(IconButtonStyle()).help("Unfollow").accessibilityLabel("Unfollow \(repository.slug)")
+                }
+                .help(repository.lastError ?? "")
+            }
+            Button { editor = .repository } label: { Label("Follow Repository", systemImage: "plus") }
+                .buttonStyle(PillButtonStyle(compact: true))
+        }
+        .surface(padding: 18, radius: 22)
     }
 }
 
