@@ -78,6 +78,7 @@ struct MainView: View {
         .onChange(of: destination) { _, _ in search = "" }
         .onAppear {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+            AppRuntime.scheduleTestClick()
         }
         .sheet(item: $editor) { item in
             switch item {
@@ -117,6 +118,7 @@ struct MainView: View {
         }
         .padding(.leading, 92).padding(.trailing, 20)
         .frame(height: 64)
+        .background(WindowDragArea())
         .background(Palette.bar)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.opacity(0.7)).frame(height: 1) }
     }
@@ -329,9 +331,24 @@ struct MainView: View {
         }
     }
 
-    private func emptyState(_ title: String, _ description: String, _ symbol: String) -> some View {
-        ContentUnavailableView(title, systemImage: symbol, description: Text(description))
-            .frame(maxWidth: .infinity).padding(.vertical, 36)
+    /// Unifai's own empty state. Replaces ContentUnavailableView, whose hit area covered
+    /// buttons placed below it, so the optional action lives inside the component instead.
+    private func emptyState(_ title: String, _ description: String, _ symbol: String,
+                            action: String? = nil, perform: @escaping () -> Void = {}) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 22, weight: .semibold)).foregroundStyle(Palette.accentInk)
+                .frame(width: 56, height: 56)
+                .background(Circle().fill(Palette.accent.opacity(0.14)))
+                .overlay(Circle().strokeBorder(Palette.accent.opacity(0.2)))
+            Text(title).font(.system(size: 17, weight: .bold)).tracking(-0.2)
+            Text(description).font(.system(size: 13)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 420).fixedSize(horizontal: false, vertical: true)
+            if let action {
+                Button(action, action: perform).buttonStyle(PillButtonStyle(kind: .primary)).padding(.top, 6)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
     }
 
     private func moreMenu<Content: View>(_ label: String, onColor: Bool = false, @ViewBuilder content: () -> Content) -> some View {
@@ -360,11 +377,9 @@ struct MainView: View {
             pageHeader(greeting, Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()) + ". Here is where your AI money stands.")
                 .padding(.bottom, -26)
             if store.state.accounts.isEmpty && store.state.payments.isEmpty && store.state.repositories.isEmpty {
-                VStack(spacing: 0) {
-                    emptyState("Start with your wallets", "Connect OpenRouter or DeepSeek, record subscription payments, and follow public GitHub releases.", "wallet.pass")
-                    Button("Browse Catalogue") { destination = .catalogue }.buttonStyle(PillButtonStyle(kind: .primary)).padding(.bottom, 30)
-                }
-                .surface()
+                emptyState("Start with your wallets", "Connect OpenRouter or DeepSeek, record subscription payments, and follow public GitHub releases.", "wallet.pass",
+                           action: "Browse Catalogue") { destination = .catalogue }
+                    .surface()
             }
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 16) {
@@ -450,6 +465,7 @@ struct MainView: View {
         .foregroundStyle(.white)
         .frame(height: 232)
         .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Color.white.opacity(0.14)))
         .shadow(color: Palette.hero[1].opacity(0.35), radius: 24, y: 12)
     }
@@ -630,8 +646,18 @@ struct MainView: View {
         let attention = store.state.accounts.filter(needsAttention).count
         return VStack(alignment: .leading, spacing: 0) {
             pageHeader("Wallets", "Each account keeps its own label, billing owner, key and currency.",
-                       chip: attention > 0 ? Chip(text: "\(attention) need attention", tint: Palette.warning, symbol: "exclamationmark.triangle.fill") : Chip(text: "All current", tint: Palette.positive, symbol: "checkmark"))
-            if items.isEmpty { emptyState("No matching wallets", "Browse the catalogue to connect a service or add a manual account.", "wallet.pass").surface() }
+                       chip: store.state.accounts.isEmpty ? nil : attention > 0 ? Chip(text: "\(attention) need attention", tint: Palette.warning, symbol: "exclamationmark.triangle.fill") : Chip(text: "All current", tint: Palette.positive, symbol: "checkmark"))
+            if items.isEmpty {
+                Group {
+                    if store.state.accounts.isEmpty {
+                        emptyState("No wallets yet", "Connect OpenRouter or DeepSeek for live balances, or add any provider as a manual account.", "wallet.pass",
+                                   action: "Browse Catalogue") { destination = .catalogue }
+                    } else {
+                        emptyState("No matching wallets", "Try a different search.", "magnifyingglass")
+                    }
+                }
+                .surface()
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 18, alignment: .top)], spacing: 18) {
                 ForEach(items) { walletTile($0) }
             }
@@ -769,7 +795,10 @@ struct MainView: View {
         return VStack(alignment: .leading, spacing: 0) {
             pageHeader("Subscriptions", "Expected charges stay separate from payment history. Record each settled renewal when it happens.",
                        chip: monthly.first.map { Chip(text: "\($0.plainText) / month expected", tint: Palette.accent, symbol: "repeat") })
-            if items.isEmpty { emptyState("No matching subscriptions", "Add a schedule for a plan you already pay for.", "calendar").surface() }
+            if items.isEmpty {
+                emptyState(store.state.subscriptions.isEmpty ? "No subscriptions yet" : "No matching subscriptions", "Add a schedule for a plan you already pay for.", "calendar",
+                           action: store.state.subscriptions.isEmpty ? "Add Subscription" : nil) { editor = .subscription(nil) }.surface()
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 18, alignment: .top)], spacing: 18) {
                 ForEach(items) { planCard($0) }
             }
@@ -784,6 +813,7 @@ struct MainView: View {
             if let id = linked?.integrationID {
                 ProviderLogo(integrationID: id, size: 140, ink: .white).opacity(0.12).rotationEffect(.degrees(-14))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).offset(x: 30, y: -24)
+                    .allowsHitTesting(false)
             }
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: 8) {
@@ -915,7 +945,9 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 18) {
             pageHeader("Releases", "Latest 50 public releases per repository. Manual refresh, up to every 30 minutes, no sign-in. Up to 10 repositories share a 20-request hourly budget.")
                 .padding(.bottom, -18)
-            if store.state.repositories.isEmpty { emptyState("Follow a project", "Add a public repository to see its source-linked releases.", "shippingbox").surface() }
+            if store.state.repositories.isEmpty {
+                emptyState("Follow a project", "Add a public repository to see its source-linked releases.", "shippingbox", action: "Follow Repository") { editor = .repository }.surface()
+            }
             ForEach(store.state.repositories.filter { matches($0.slug) || $0.releases.contains { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.tag.localizedCaseInsensitiveContains(search) } }) { repository in
                 repositoryPanel(repository)
             }

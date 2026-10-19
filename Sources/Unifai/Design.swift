@@ -236,6 +236,9 @@ struct MeshBackdrop: View {
             .drawingGroup()
             .overlay(Grain())
         }
+        // The blurred blobs extend past the card; clipping hides them but does not stop them
+        // from catching clicks meant for neighbouring controls.
+        .allowsHitTesting(false)
     }
 }
 
@@ -552,6 +555,7 @@ struct WalletCard: View {
                 .rotationEffect(.degrees(-14))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .offset(x: 34, y: 44)
+                .allowsHitTesting(false)
             LinearGradient(colors: [.clear, .black.opacity(0.22)], startPoint: .center, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
@@ -573,6 +577,7 @@ struct WalletCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
         .shadow(color: colors[1].opacity(0.28), radius: 16, y: 8)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
@@ -843,12 +848,32 @@ struct WindowConfigurator: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-        window.isMovableByWindowBackground = true
+        // Dragging is limited to the header (WindowDragArea). Whole-window background dragging made
+        // macOS treat clicks inside scrolling content as drags, which swallowed button presses.
+        window.isMovableByWindowBackground = false
         window.isOpaque = true
         window.backgroundColor = Palette.canvasNS
         window.toolbar = nil
         coordinator.attach(to: window)
     }
+}
+
+/// Title-bar behaviour for the custom header: drag to move the window, double-click to zoom
+/// (or minimise, following the user's Dock setting).
+struct WindowDragArea: NSViewRepresentable {
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+                if action == "Minimize" { window?.performMiniaturize(nil) } else if action != "None" { window?.performZoom(nil) }
+            } else {
+                window?.performDrag(with: event)
+            }
+        }
+    }
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) {}
 }
 
 /// Re-centres the close, minimise and zoom buttons in a taller custom header.

@@ -49,8 +49,8 @@ struct UnifaiApp: App {
         AppRuntime.store = model
         AppRuntime.fixtureMode = fixtureMode
         AppRuntime.channel = fixtureMode ? "fixture" : channel
-        // Fixture-only: open a specific screen for visual verification.
-        if fixtureMode, let index = args.firstIndex(of: "--destination"), args.indices.contains(index + 1) {
+        // Demo and dev builds: open a specific screen for visual verification.
+        if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--destination"), args.indices.contains(index + 1) {
             AppRuntime.initialDestination = Destination(rawValue: args[index + 1])
         }
         _store = StateObject(wrappedValue: model)
@@ -81,6 +81,26 @@ struct MainWindowCommands: Commands {
     static var fixtureMode = false
     static var channel = "release"
     static var initialDestination: Destination?
+
+    /// Development and demo builds only: `--test-click x,y` sends a click to the main window at a
+    /// point measured from its top-left corner, through normal AppKit hit-testing, without moving
+    /// the pointer or touching other apps. Used to verify that controls actually receive clicks.
+    static func scheduleTestClick() {
+        guard channel != "release", let index = CommandLine.arguments.firstIndex(of: "--test-click"),
+              CommandLine.arguments.indices.contains(index + 1) else { return }
+        let parts = CommandLine.arguments[index + 1].split(separator: ",").compactMap { Double($0) }
+        guard parts.count == 2 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView is NSHostingView<AnyView> || ($0.isVisible && $0.title == "Unifai") }) ?? NSApp.windows.first(where: \.isVisible) else { return }
+            let point = NSPoint(x: parts[0], y: window.frame.height - parts[1])
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    window.sendEvent(event)
+                }
+            }
+        }
+    }
     static var showCompanion: (() -> Void)?
     static var openMain: (() -> Void)?
 }
