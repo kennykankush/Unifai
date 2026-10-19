@@ -4,6 +4,9 @@
 # Usage:
 #   scripts/release.sh            full release of the version in VERSION
 #   scripts/release.sh --dry-run  build, sign and verify locally; no notarization, tag or upload
+#   scripts/release.sh --skip-notarize
+#                                 publish a Developer ID signed build without notarization (first launch
+#                                 then needs Open Anyway); use only while notarization is unavailable
 #
 # One-time setup on the release Mac:
 #   1. A "Developer ID Application" certificate in the login keychain (Xcode > Settings > Accounts).
@@ -16,8 +19,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-dry_run=0
-[[ "${1:-}" == "--dry-run" ]] && dry_run=1
+dry_run=0; notarize=1
+case "${1:-}" in
+    --dry-run) dry_run=1 ;;
+    --skip-notarize) notarize=0 ;;
+    "") ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; exit 64 ;;
+esac
 
 version="$(tr -d '[:space:]' < VERSION)"
 tag="v$version"
@@ -44,7 +52,7 @@ if (( ! dry_run )); then
     git fetch -q origin main --tags
     [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || fail "Push main before releasing."
     if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then fail "$tag already exists. Bump VERSION."; fi
-    xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1 \
+    (( ! notarize )) || xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1 \
         || fail "Notary profile '$profile' not found. Run: xcrun notarytool store-credentials $profile --apple-id <id> --team-id <team>"
 fi
 
@@ -69,17 +77,19 @@ if (( dry_run )); then
     exit 0
 fi
 
-step "Notarizing (this usually takes a few minutes)"
-result="$(xcrun notarytool submit "$zip" --keychain-profile "$profile" --wait --output-format json)"
-status="$(printf '%s' "$result" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
-if [[ "$status" != "Accepted" ]]; then
-    submission="$(printf '%s' "$result" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
-    [[ -n "$submission" ]] && xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
-    fail "Notarization status: ${status:-unknown}"
+if (( notarize )); then
+    step "Notarizing (this usually takes a few minutes)"
+    result="$(xcrun notarytool submit "$zip" --keychain-profile "$profile" --wait --output-format json)"
+    status="$(printf '%s' "$result" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
+    if [[ "$status" != "Accepted" ]]; then
+        submission="$(printf '%s' "$result" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+        [[ -n "$submission" ]] && xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
+        fail "Notarization status: ${status:-unknown}"
+    fi
+    xcrun stapler staple "$app"
+    spctl --assess --type execute --verbose=2 "$app"
+    package
 fi
-xcrun stapler staple "$app"
-spctl --assess --type execute --verbose=2 "$app"
-package
 sha="$(shasum -a 256 "$zip" | awk '{ print $1 }')"
 
 step "Publishing $tag to GitHub"
@@ -87,7 +97,11 @@ previous="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 notes="$(mktemp)"
 {
     printf 'Install or update with Homebrew:\n\n```sh\nbrew install --cask %s/unifai\nbrew upgrade --cask unifai\n```\n\n' "${tap/homebrew-/}"
-    printf 'Signed with Developer ID and notarized by Apple. Apple silicon, macOS 14 or later.\n\n## Changes\n\n'
+    if (( notarize )); then
+        printf 'Signed with Developer ID and notarized by Apple. Apple silicon, macOS 14 or later.\n\n## Changes\n\n'
+    else
+        printf 'Signed with Developer ID but **not notarized**. On first launch macOS will block it once: open System Settings > Privacy & Security and click Open Anyway. Apple silicon, macOS 14 or later.\n\n## Changes\n\n'
+    fi
     if [[ -n "$previous" ]]; then git log --no-merges --format='- %s' "$previous..HEAD"; else git log --no-merges --format='- %s'; fi
 } > "$notes"
 git tag -a "$tag" -m "Unifai $version"
@@ -98,6 +112,10 @@ rm -f "$notes"
 step "Updating Homebrew tap $tap"
 if ! gh repo view "$tap" >/dev/null 2>&1; then
     gh repo create "$tap" --public --description "Homebrew tap for Unifai" >/dev/null
+fi
+caveats=""
+if (( ! notarize )); then
+    caveats=$'\n  caveats <<~EOS\n    This build is signed with Developer ID but not notarized.\n    If macOS blocks the first launch, open System Settings > Privacy & Security\n    and click Open Anyway.\n  EOS\n'
 fi
 work="$(mktemp -d)"
 git clone -q "https://github.com/$tap.git" "$work/tap" 2>/dev/null || { mkdir -p "$work/tap"; git -C "$work/tap" init -q -b main; git -C "$work/tap" remote add origin "https://github.com/$tap.git"; }
@@ -119,7 +137,7 @@ cask "unifai" do
   binary "#{appdir}/Unifai.app/Contents/MacOS/unifai-mcp"
 
   uninstall quit: "dev.unifai.app"
-
+$caveats
   zap trash: [
     "~/Library/Application Support/Unifai",
     "~/Library/Preferences/dev.unifai.app.plist",
