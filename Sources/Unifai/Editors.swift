@@ -63,7 +63,7 @@ struct AccountEditor: View {
                 } footer: { Text(integration.id == "codex" ? "Already signed in to Codex? Skip this and add the account." : "Already signed in to Claude Code? Skip this and add the account.") }
             } else if mode == .live {
                 Section {
-                    SecureField(account == nil ? "Credential" : "Replace Credential", text: $credential, prompt: Text(account == nil ? (integration.id == "openai-api" ? "sk-admin-..." : "Paste a key") : "Leave blank to keep the saved key"))
+                    SecureField(account == nil ? "Credential" : "Replace Credential", text: $credential, prompt: Text(account == nil ? (integration.id == "openai-api" ? "sk-admin-..." : integration.id == "claude-api" ? "sk-ant-admin01-..." : "Paste a key") : "Leave blank to keep the saved key"))
                         .textContentType(.password)
                     Text(credentialHint).font(.caption).foregroundStyle(.secondary)
                 } footer: { Text("Saved per account in macOS Keychain. No refresh occurs until you click Refresh. In a synthetic workspace, keys stay in memory and requests use fixtures.") }
@@ -85,6 +85,7 @@ struct AccountEditor: View {
         switch integration.id {
         case "openrouter": return "OpenRouter requires a management key. It has broad account authority; Unifai only sends GET /api/v1/credits."
         case "openai-api": return "Create an organization Admin key at platform.openai.com > Settings > Organization > Admin keys. It has broad access; Unifai only sends GET /v1/organization/costs."
+        case "claude-api": return "Create an Admin key in Claude Console > Settings > Admin keys (organizations only). It has broad access; Unifai only sends GET /v1/organizations/cost_report. Import top-ups from receipts on the Payments page."
         default: return "Unifai only sends GET /user/balance with the key you enter."
         }
     }

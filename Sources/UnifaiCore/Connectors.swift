@@ -41,17 +41,29 @@ public struct BalanceClient {
             var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
             let start = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: now))!
             endpoint = "https://api.openai.com/v1/organization/costs?start_time=\(Int(start.timeIntervalSince1970))&bucket_width=1d&limit=31"
+        case "claude-api":
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
+            let start = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: now))!
+            endpoint = "https://api.anthropic.com/v1/organizations/cost_report?starting_at=\(start.ISO8601Format())&bucket_width=1d&limit=31"
         default: throw ValidationError.message("This service does not have a live balance connector yet.")
         }
         let url = URL(string: endpoint)!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        if integrationID == "claude-api" {
+            request.setValue(credential, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.setValue("Unifai/1 (https://github.com/kennykankush/Unifai)", forHTTPHeaderField: "User-Agent")
+        } else {
+            request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw ConnectorError.invalidResponse }
         switch response.statusCode {
         case 200..<300: break
+        case 401 where integrationID == "claude-api", 403 where integrationID == "claude-api":
+            throw ValidationError.message("Anthropic refused the key. The Cost API needs an Admin key (sk-ant-admin01-...) from Console > Settings > Admin keys, which requires an organization rather than an individual account.")
         case 401 where integrationID == "openai-api", 403 where integrationID == "openai-api":
             throw ValidationError.message("OpenAI refused the key. The Costs API needs an organization Admin key (sk-admin-...) from platform.openai.com > Settings > Organization > Admin keys.")
         case 401, 403: throw ConnectorError.authorization
@@ -62,6 +74,28 @@ public struct BalanceClient {
     }
     public static func decode(integrationID: String, data: Data, source: URL, now: Date = .now) throws -> BalanceSnapshot {
         do {
+            if integrationID == "claude-api" {
+                let body = try JSONDecoder().decode(AnthropicCostReport.self, from: data)
+                var totals: [String: Decimal] = [:], latest: [String: Decimal] = [:]
+                let todayStart = Calendar.current.startOfDay(for: now)
+                for bucket in body.data {
+                    let ending = ISO8601DateFormatter().date(from: bucket.ending_at) ?? .distantPast
+                    for result in bucket.results {
+                        // Amounts are decimal strings in the lowest currency unit (cents).
+                        guard let cents = Decimal(string: result.amount, locale: Locale(identifier: "en_US_POSIX")), !cents.isNaN, cents >= 0 else { throw ConnectorError.invalidResponse }
+                        let currency = result.currency.uppercased()
+                        guard Money.validCurrency(currency) else { throw ConnectorError.invalidResponse }
+                        totals[currency, default: 0] += cents / 100
+                        if ending > todayStart { latest[currency, default: 0] += cents / 100 }
+                    }
+                }
+                if totals.isEmpty { totals["USD"] = 0 }
+                return BalanceSnapshot(balances: [], details: latest.keys.sorted().map { BalanceDetail("Latest day", Money(latest[$0]!, $0)) },
+                                       reportedConsumption: totals.keys.sorted().map { Money(totals[$0]!, $0) }, observedAt: now,
+                                       source: URL(string: "https://platform.claude.com/docs/en/manage-claude/usage-cost-api")!,
+                                       coverage: "Anthropic Cost API totals for the last 30 days, by UTC day. Priority Tier costs are excluded, and Anthropic offers no remaining-credit endpoint. Claude subscriptions are separate.",
+                                       consumptionPeriod: "Last 30 days")
+            }
             if integrationID == "openai-api" {
                 let body = try JSONDecoder().decode(OpenAICostsPage.self, from: data)
                 var totals: [String: Decimal] = [:]
@@ -194,6 +228,12 @@ public struct GitHubClient {
         let id: Int; let name: String?; let tag_name: String; let html_url: URL
         let published_at: Date?; let prerelease: Bool; let draft: Bool
     }
+}
+
+struct AnthropicCostReport: Decodable {
+    struct Bucket: Decodable { let starting_at: String; let ending_at: String; let results: [Result] }
+    struct Result: Decodable { let amount: String; let currency: String }
+    let data: [Bucket]
 }
 
 struct OpenAICostsPage: Decodable {

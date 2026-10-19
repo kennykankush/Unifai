@@ -28,10 +28,10 @@ final class StoreTests: XCTestCase {
         try store.addAccount(integrationID: "openrouter", label: "Personal", billingScope: " Personal ", mode: .live, credential: "fixture")
         XCTAssertThrowsError(try store.addAccount(integrationID: "openrouter", label: "Other key", billingScope: "personal", mode: .live, credential: "fixture"))
         XCTAssertThrowsError(try store.addAccount(integrationID: "openrouter", label: "personal", billingScope: "different", mode: .manual))
-        XCTAssertThrowsError(try store.addAccount(integrationID: "claude-api", label: "Org", billingScope: "Org", mode: .live, credential: "fixture"))
+        XCTAssertThrowsError(try store.addAccount(integrationID: "gemini-api", label: "Org", billingScope: "Org", mode: .live, credential: "fixture"))
         XCTAssertThrowsError(try store.addAccount(integrationID: "deepseek", label: "No owner", billingScope: "", mode: .live, credential: "fixture"))
         XCTAssertThrowsError(try store.addAccount(integrationID: "x-accounts", label: "News", billingScope: "", mode: .manual))
-        try store.addAccount(integrationID: "claude-api", label: "Org", billingScope: "", mode: .manual)
+        try store.addAccount(integrationID: "gemini-api", label: "Org", billingScope: "", mode: .manual)
         XCTAssertEqual(store.state.accounts.count, 2)
     }
     func testCredentialsRejectControlCharactersAndNeverEnterMetadata() async throws {

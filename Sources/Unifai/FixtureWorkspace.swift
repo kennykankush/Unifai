@@ -45,6 +45,9 @@ enum FixtureWorkspace {
         if !store.state.accounts.contains(where: { $0.integrationID == "claude-subscription" }) {
             try store.addAccount(integrationID: "claude-subscription", label: "Personal", billingScope: "Claude subscription", mode: .live)
         }
+        if !store.state.accounts.contains(where: { $0.integrationID == "claude-api" }) {
+            try store.addAccount(integrationID: "claude-api", label: "Console", billingScope: "Synthetic Claude organization", mode: .live, credential: "fixture-valid")
+        }
         if !store.state.accounts.contains(where: { $0.integrationID == "openai-api" }) {
             try store.addAccount(integrationID: "openai-api", label: "Side projects", billingScope: "Synthetic organization", mode: .live, credential: "fixture-valid")
         }
@@ -61,6 +64,15 @@ enum FixtureWorkspace {
         }
         if integration == "claude-subscription" {
             return try ClaudeCodeClient.decode(Data(#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}"#.utf8), now: now)
+        }
+        if integration == "claude-api" {
+            let iso = ISO8601DateFormatter(), today = Calendar.current.startOfDay(for: now)
+            let buckets = (0..<30).map { day -> String in
+                let start = today.addingTimeInterval(TimeInterval((day - 29) * 86400))
+                let cents = [412, 0, 1180, 655, 2310, 95][day % 6]
+                return "{\"starting_at\":\"\(iso.string(from: start))\",\"ending_at\":\"\(iso.string(from: start.addingTimeInterval(86400)))\",\"results\":[{\"amount\":\"\(cents)\",\"currency\":\"USD\"}]}"
+            }
+            return try BalanceClient.decode(integrationID: integration, data: Data("{\"data\":[\(buckets.joined(separator: ","))],\"has_more\":false}".utf8), source: URL(string: "https://api.anthropic.com")!, now: now)
         }
         if integration == "openai-api" {
             let today = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)

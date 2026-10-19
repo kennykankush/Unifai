@@ -89,7 +89,7 @@ final class ConnectorTests: XCTestCase {
     }
     func testMissingCredentialAndUnsupportedProviderSendNoRequest() async {
         StubProtocol.handler = { _ in XCTFail("Must not send request"); return (500, [:], Data()) }
-        for (integration, credential) in [("openrouter", ""), ("claude-api", "fixture-key")] {
+        for (integration, credential) in [("openrouter", ""), ("gemini-api", "fixture-key")] {
             do { _ = try await BalanceClient(session: StubProtocol.session()).fetch(integrationID: integration, credential: credential); XCTFail() } catch {}
         }
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import UnifaiCore
 
 enum Destination: String, CaseIterable, Identifiable {
@@ -561,6 +562,26 @@ struct MainView: View {
         }
     }
 
+    /// Imports confirmed payments from a CSV the user picks. Nothing is read unless chosen here.
+    private func importPayments() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Payments"
+        panel.message = "Choose a CSV with date, description, amount, currency, kind, account, account_label and reference columns."
+        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let rows = try PaymentImport.parse(try String(contentsOf: url, encoding: .utf8))
+            let summary = try store.importPayments(rows)
+            var lines = ["Imported \(summary.imported) payment\(summary.imported == 1 ? "" : "s")."]
+            if summary.duplicates > 0 { lines.append("Skipped \(summary.duplicates) already recorded.") }
+            if !summary.createdAccounts.isEmpty { lines.append("Added wallets: \(summary.createdAccounts.joined(separator: ", ")).") }
+            store.notice = lines.joined(separator: " ")
+        } catch {
+            store.notice = "Nothing was imported. \(error.localizedDescription)"
+        }
+    }
+
     @ViewBuilder private func walletMenuItems(_ account: ConnectedAccount) -> some View {
         if account.mode == .live { Button("Refresh Balance") { Task { await store.refreshAccount(account.id) } } }
         if SignIn.supports(account.integrationID) { Button(SignIn.title(account.integrationID)) { signIn(account) } }
@@ -576,7 +597,8 @@ struct MainView: View {
             SectionHeading(title: "Transactions", subtitle: "Recorded") { SeeAllButton { destination = .payments } }
                 .padding(.bottom, 6)
             if items.isEmpty {
-                emptyState("No payments yet", "Record a top-up or subscription charge from a receipt.", "creditcard")
+                emptyState("No payments yet", "Record a top-up or subscription charge from a receipt, or import a CSV of past payments.", "creditcard",
+                           action: "Import CSV", perform: importPayments)
             }
             ForEach(items) { transactionRow($0) }
         }
@@ -823,7 +845,12 @@ struct MainView: View {
                 .frame(width: 260, height: 300)
             }
             VStack(alignment: .leading, spacing: 4) {
-                SectionHeading(title: "History", subtitle: "\(items.count) record\(items.count == 1 ? "" : "s")").padding(.bottom, 10)
+                SectionHeading(title: "History", subtitle: "\(items.count) record\(items.count == 1 ? "" : "s")") {
+                    Button(action: importPayments) { Label("Import CSV", systemImage: "square.and.arrow.down") }
+                        .buttonStyle(PillButtonStyle(compact: true))
+                        .help("Import confirmed payments from a CSV file: date, description, amount, currency, kind, account, account_label, reference")
+                }
+                .padding(.bottom, 10)
                 if items.isEmpty { emptyState("No matching payments", "Add a confirmed payment to begin your recorded history.", "creditcard") }
                 let groups = Dictionary(grouping: items) { Calendar.current.dateInterval(of: .month, for: $0.paidAt)?.start ?? $0.paidAt }
                 ForEach(groups.keys.sorted(by: >), id: \.self) { month in

@@ -101,6 +101,43 @@ public final class AppStore: ObservableObject {
         do { try change { $0.accounts.removeAll { $0.id == id } } }
         catch { if let previous { try? vault.write(previous, accountID: id) }; throw error }
     }
+    /// Adds imported payments in one save. Rows already recorded (same wallet and receipt
+    /// reference, or same wallet, day, amount and description) are skipped. Missing wallets for
+    /// a named service are created as manual accounts. Any invalid row rejects the whole file.
+    @discardableResult
+    public func importPayments(_ rows: [PaymentImport.Row], now: Date = .now) throws -> PaymentImport.Summary {
+        guard loadFailure == nil else { throw ValidationError.message("Repair the saved data before importing.") }
+        var summary = PaymentImport.Summary()
+        try change { next in
+            for row in rows {
+                var accountID: UUID?
+                if let integration = row.integrationID {
+                    if let existing = next.accounts.first(where: { $0.integrationID == integration && $0.label.caseInsensitiveCompare(row.accountLabel) == .orderedSame })
+                        ?? next.accounts.first(where: { $0.integrationID == integration }) {
+                        accountID = existing.id
+                    } else {
+                        let created = ConnectedAccount(integrationID: integration, label: row.accountLabel, billingScope: "", mode: .manual)
+                        next.accounts.append(created)
+                        accountID = created.id
+                        summary.createdAccounts.append("\(Catalogue.integration(integration)?.name ?? integration) · \(row.accountLabel)")
+                    }
+                }
+                let record = PaymentRecord(accountID: accountID, description: row.description, kind: row.kind, money: row.money, paidAt: row.paidAt, reference: row.reference)
+                let day = Calendar.current.startOfDay(for: row.paidAt)
+                let duplicate = next.payments.contains { existing in
+                    guard existing.accountID == accountID else { return false }
+                    if !row.reference.isEmpty { return existing.reference.caseInsensitiveCompare(row.reference) == .orderedSame }
+                    return Calendar.current.startOfDay(for: existing.paidAt) == day && existing.money == row.money && existing.description == row.description
+                }
+                if duplicate { summary.duplicates += 1; continue }
+                do { try Ledger.validate(record, existing: next.payments, now: now) }
+                catch { throw ValidationError.message("Line \(row.line): \(error.localizedDescription)") }
+                next.payments.append(record)
+                summary.imported += 1
+            }
+        }
+        return summary
+    }
     public func savePayment(_ record: PaymentRecord, now: Date = .now) throws {
         try Ledger.validate(record, existing: state.payments, now: now)
         try validateAccount(record.accountID)

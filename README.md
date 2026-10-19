@@ -59,6 +59,7 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 | DeepSeek API | Current balances and purchased/promotional components, preserving currency | Enter an API key, then click Refresh. This endpoint supplies no payment or consumption history. |
 | ChatGPT & Codex | ChatGPT plan, Codex 5-hour and weekly limits with reset times, Codex credits | Install Codex (`brew install codex`), then **Sign in with ChatGPT** in Unifai or run `codex login`. Unifai talks to the local Codex app (`codex app-server`) and stores no OpenAI credential. |
 | Claude subscription / Code | Claude plan (Pro, Max, Team) and sign-in state | Install Claude Code, then **Sign in with Claude** (opens `claude auth login` in Terminal). Anthropic does not share subscription usage limits with other apps, so those stay in Claude Code's `/usage`. |
+| Claude API / Console | API spend for the last 30 days | Enter an Admin key (`sk-ant-admin01-...`), which Anthropic only issues to Console organizations. Unifai only calls the Cost API; Anthropic has no remaining-credit endpoint, so import credit top-ups from receipts. |
 | OpenAI API Platform | API spend per currency for the last 30 days | Enter an organization Admin key (`sk-admin-...`). Unifai only calls the Costs API; OpenAI has no prepaid balance endpoint. |
 | Manual financial accounts | Payments, refunds and expected renewals | Add confirmed records from receipts. Automatic balances and allowances remain unavailable. |
 | Public GitHub releases | Latest 50 published releases, original links, optional prereleases | Add `owner/repository`, then click Refresh. No credential is accepted or needed. |
@@ -66,6 +67,8 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 The catalogue separates implemented connectors, manual records and planned capabilities. Planned financial services offer **Add Manual Account**. Planned news sources have no connection action. Claude API, Claude subscriptions, Codex allowances and OpenAI API billing remain separate entries.
 
 In **Payments**, record settled charges using a positive amount and an ISO currency code such as USD or CNY. Choose **Refund** to reduce the paid total. A receipt reference detects duplicates within the same account. Edit or remove records through their row controls; removals require confirmation.
+
+To bring in past payments, choose **Import CSV** on the Payments page. The file needs a header row with `date` (YYYY-MM-DD), `amount` and `currency`, and can add `description`, `kind` (subscription, top-up, usage or refund), `account` (a catalogue service such as `claude-api`), `account_label` and `reference`. Rows already recorded for the same wallet and receipt reference are skipped, a missing wallet is created as a manual account, and any invalid row rejects the whole file so nothing is half-imported.
 
 In **Subscriptions**, save an expected amount, cadence and renewal date. A schedule creates no payments. After a renewal settles, choose **Record Settled Payment**, confirm the receipt, and update the next expected date. A ChatGPT plan shared with Codex should be recorded once.
 
