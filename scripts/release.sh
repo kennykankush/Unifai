@@ -131,7 +131,7 @@ cask "unifai" do
   homepage "https://github.com/$repo"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Unifai.app"
   binary "#{appdir}/Unifai.app/Contents/MacOS/unifai-mcp"
