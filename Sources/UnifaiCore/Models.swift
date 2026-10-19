@@ -89,6 +89,8 @@ public struct ConnectedAccount: Codable, Identifiable, Hashable {
     public var snapshot: BalanceSnapshot?
     public var lastAttempt: Date?
     public var lastError: String?
+    /// Notify when remaining credit falls below this amount, in the balance's own currency.
+    public var lowBalanceAlert: Decimal?
     public init(id: UUID = UUID(), integrationID: String, label: String, billingScope: String = "", mode: ConnectionMode) {
         self.id = id; self.integrationID = integrationID; self.label = label
         self.billingScope = billingScope; self.mode = mode; self.createdAt = .now
@@ -114,7 +116,9 @@ public struct PaymentRecord: Codable, Identifiable, Hashable {
     public var createdAt: Date
     /// Set when a schedule recorded this renewal automatically; cleared once confirmed by a receipt or by hand.
     public var scheduleID: UUID?
-    public var autoRecorded: Bool { scheduleID != nil }
+    /// Recorded by Unifai from a pay-as-you-go wallet's last usage reading at period end.
+    public var estimated: Bool?
+    public var autoRecorded: Bool { scheduleID != nil || estimated == true }
     public init(id: UUID = UUID(), accountID: UUID? = nil, description: String, kind: PaymentKind, money: Money, paidAt: Date, reference: String = "", scheduleID: UUID? = nil) {
         self.id = id; self.accountID = accountID; self.description = description; self.kind = kind
         self.money = money; self.paidAt = paidAt; self.reference = reference; self.createdAt = .now; self.scheduleID = scheduleID
@@ -284,6 +288,10 @@ public struct PersistentState: Codable, Equatable {
     public var dismissedSuggestions: [String]?
     /// Currency used to combine spending views. Nil shows each currency separately.
     public var displayCurrency: String?
+    /// Monthly spending budget, compared against this month's payments in its currency.
+    public var monthlyBudget: Money?
+    /// Refresh live wallets in the background while the app runs. Nil means on.
+    public var autoRefresh: Bool?
     public init() {}
 }
 

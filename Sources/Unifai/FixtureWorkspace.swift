@@ -45,6 +45,9 @@ enum FixtureWorkspace {
         if !store.state.accounts.contains(where: { $0.integrationID == "claude-subscription" }) {
             try store.addAccount(integrationID: "claude-subscription", label: "Personal", billingScope: "Claude subscription", mode: .live)
         }
+        if !store.state.accounts.contains(where: { $0.integrationID == "azure-subscription" }) {
+            try store.addAccount(integrationID: "azure-subscription", label: "Personal", billingScope: "Azure subscription", mode: .live)
+        }
         if !store.state.accounts.contains(where: { $0.integrationID == "claude-api" }) {
             try store.addAccount(integrationID: "claude-api", label: "Console", billingScope: "Synthetic Claude organization", mode: .live, credential: "fixture-valid")
         }
@@ -70,6 +73,11 @@ enum FixtureWorkspace {
             let fiveHour = Int(now.addingTimeInterval(3 * 3600 + 1200).timeIntervalSince1970), weekly = Int(now.addingTimeInterval(3 * 86400 + 7200).timeIntervalSince1970)
             let limits = Data("{\"rateLimits\":{\"limitId\":\"codex\",\"planType\":\"plus\",\"primary\":{\"usedPercent\":42,\"windowDurationMins\":300,\"resetsAt\":\(fiveHour)},\"secondary\":{\"usedPercent\":68,\"windowDurationMins\":10080,\"resetsAt\":\(weekly)},\"credits\":{\"hasCredits\":true,\"unlimited\":false,\"balance\":\"120.50\"}}}".utf8)
             return try CodexClient.decode(account: account, limits: limits, now: now)
+        }
+        if integration == "azure-subscription" {
+            let rows = #"[[8.36,"Virtual Machines","USD"],[7.11,"Foundry Models","USD"],[1.05,"Storage","USD"],[0.63,"Virtual Network","USD"]]"#
+            let body = #"{"properties":{"columns":[{"name":"Cost"},{"name":"ServiceName"},{"name":"Currency"}],"rows":"# + rows + "}}"
+            return try AzureCostClient.decode([("Synthetic subscription", Data(body.utf8))], now: now)
         }
         if integration == "claude-subscription" {
             return try ClaudeCodeClient.decode(Data(#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}"#.utf8), now: now)

@@ -26,7 +26,7 @@ enum Destination: String, CaseIterable, Identifiable {
 }
 
 enum Editor: Identifiable {
-    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage
+    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage, settings
     var id: String {
         switch self {
         case .account(let integration, let account): return "account-\(integration.id)-\(account?.id.uuidString ?? "new")"
@@ -34,6 +34,7 @@ enum Editor: Identifiable {
         case .subscription(let record): return "subscription-\(record?.id.uuidString ?? "new")"
         case .repository: return "repository"
         case .coverage: return "coverage"
+        case .settings: return "settings"
         }
     }
 }
@@ -83,13 +84,20 @@ struct MainView: View {
             // Record renewals that fell due while the app was closed, then check every 30 minutes.
             while !Task.isCancelled {
                 announce(store.recordDueRenewals())
+                announce(store.closePayAsYouGoPeriods())
                 await store.refreshRatesIfNeeded()
+                await store.refreshStaleAccounts()
+                Notifier.shared.evaluate(store)
                 try? await Task.sleep(for: .seconds(1800))
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in announce(store.recordDueRenewals()) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            announce(store.recordDueRenewals()); announce(store.closePayAsYouGoPeriods())
+        }
+        .onChange(of: store.state) { _, _ in Notifier.shared.evaluate(store) }
         .onAppear {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+            AppRuntime.openSettings = { editor = .settings }
             AppRuntime.scheduleTestClick()
         }
         .sheet(item: $editor) { item in
@@ -99,6 +107,7 @@ struct MainView: View {
             case .subscription(let schedule): SubscriptionEditor(schedule: schedule)
             case .repository: RepositoryEditor()
             case .coverage: CoverageEditor()
+            case .settings: SettingsEditor()
             }
         }
         .alert("Unifai", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
@@ -513,6 +522,7 @@ struct MainView: View {
                             }
                             Text(conversionCaption ?? store.state.coverageDescription).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(2)
                         }
+                        heroThisMonth
                     }
                     Spacer(minLength: 16)
                     if points.count > 2 { Sparkline(points: points).frame(width: 200, height: 84) }
@@ -526,6 +536,43 @@ struct MainView: View {
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Color.white.opacity(0.14)))
         .shadow(color: Palette.hero[1].opacity(0.35), radius: 24, y: 12)
+    }
+
+    /// This month at a glance: pay-as-you-go usage still building up, and progress against the budget.
+    @ViewBuilder private var heroThisMonth: some View {
+        let accruing = store.state.accruingThisMonth()
+        let budget = store.state.monthlyBudget
+        if !accruing.isEmpty || budget != nil {
+            HStack(spacing: 14) {
+                if !accruing.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "hourglass").font(.system(size: 10, weight: .bold))
+                        Text("Accruing " + accruing.map { "\($0.amount.amountText) \($0.amount.currency)" }.joined(separator: " + ") + " on pay as you go")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .opacity(0.9)
+                    .help(accruing.map { "\(Catalogue.integration($0.account.integrationID)?.name ?? "") (\($0.account.label)): \($0.amount.plainText) so far this month, invoiced after month end" }.joined(separator: "\n"))
+                }
+                if let budget {
+                    let spent = store.state.monthToDateSpend(in: budget.currency, rates: store.rates, includeAccruing: true)
+                    let ratio = budget.amount > 0 ? NSDecimalNumber(decimal: spent.spent.amount / budget.amount).doubleValue : 0
+                    Button { editor = .settings } label: {
+                        HStack(spacing: 7) {
+                            UsageMeter(used: ratio, tint: ratio >= 1 ? Palette.hex(0xFFD1D1) : ratio >= 0.8 ? Palette.warning : Palette.lime).frame(width: 90)
+                            Text("\(spent.spent.amountText) of \(budget.amountText) \(budget.currency) budget").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(spent.complete ? "This month's payments plus pay-as-you-go usage. Click to change the budget." : "Some payments could not be converted to \(budget.currency). Combine currencies to include them.")
+                } else {
+                    Button { editor = .settings } label: { Label("Set budget", systemImage: "target").font(.system(size: 11, weight: .semibold)) }
+                        .buttonStyle(.plain).opacity(0.8)
+                }
+            }
+        } else {
+            Button { editor = .settings } label: { Label("Set a monthly budget", systemImage: "target").font(.system(size: 11, weight: .semibold)) }
+                .buttonStyle(.plain).opacity(0.8)
+        }
     }
 
     private var quickActions: some View {
@@ -613,7 +660,7 @@ struct MainView: View {
                     signingIn.remove(account.id)
                     await store.refreshAccount(account.id)
                 } else {
-                    store.notice = "Finish signing in to Claude in the Terminal window, then click Refresh on this wallet."
+                    store.notice = "Finish signing in in the Terminal window that opened, then click Refresh on this wallet."
                 }
             } catch { store.notice = error.localizedDescription }
             signingIn.remove(account.id)
@@ -622,8 +669,9 @@ struct MainView: View {
 
     private func announce(_ recorded: [PaymentRecord]) {
         guard !recorded.isEmpty else { return }
+        Notifier.shared.renewalsRecorded(recorded)
         let list = recorded.map { "\($0.description) \($0.money.plainText) on \($0.paidAt.formatted(date: .abbreviated, time: .omitted))" }
-        store.notice = "Recorded \(recorded.count) renewal\(recorded.count == 1 ? "" : "s") from your schedules: \(list.joined(separator: "; ")). They are marked Auto until a receipt confirms them."
+        store.notice = "Recorded \(recorded.count) automatic payment\(recorded.count == 1 ? "" : "s"): \(list.joined(separator: "; ")). They are marked Auto until a receipt or invoice confirms them."
     }
 
     /// Imports confirmed payments from a CSV the user picks. Nothing is read unless chosen here.
@@ -687,7 +735,7 @@ struct MainView: View {
                 MoneyText(money: record.money, size: 15, prefix: refund ? "+" : "−")
                     .foregroundStyle(refund ? Palette.positive : Color.primary)
                 HStack(spacing: 6) {
-                    if record.autoRecorded { Chip(text: "Auto", tint: Palette.accentInk, symbol: "arrow.triangle.2.circlepath").help("Recorded from a subscription schedule. Import the receipt or choose Confirm to mark it as verified.") }
+                    if record.autoRecorded { Chip(text: record.estimated == true ? "Estimate" : "Auto", tint: Palette.accentInk, symbol: "arrow.triangle.2.circlepath").help(record.estimated == true ? "Recorded from the last usage reading of the month. Import the invoice or choose Confirm to mark it as verified." : "Recorded from a subscription schedule. Import the receipt or choose Confirm to mark it as verified.") }
                     Text(refund ? "Refunded" : record.kind.rawValue).font(.system(size: 11, weight: .medium)).foregroundStyle(refund ? Palette.positive : .secondary)
                 }
             }
@@ -827,6 +875,9 @@ struct MainView: View {
                     Button { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } } label: { Label("Edit", systemImage: "pencil") }
                         .buttonStyle(PillButtonStyle(compact: true))
                     Spacer()
+                    if let billing = Catalogue.integration(account.integrationID)?.billing {
+                        Text(billing.rawValue).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     moreMenu("Options for \(account.label)") { walletMenuItems(account) }
                 }
                 // Every tile uses the same anatomy: up to three one-line rows in a fixed slot, then the
@@ -1110,7 +1161,7 @@ struct MainView: View {
                 Spacer()
                 if integration.id == "github-releases" {
                     Button("Follow Repository") { editor = .repository }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
-                } else if integration.category == .providers || integration.category == .subscriptions {
+                } else if [.providers, .subscriptions, .cloud].contains(integration.category) {
                     if integration.status == .ready {
                         Button("Add Account") { editor = .account(integration, nil) }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                     } else {

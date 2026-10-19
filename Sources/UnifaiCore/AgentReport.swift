@@ -74,6 +74,9 @@ public enum AgentReport {
         public var account: String?
     }
 
+    public struct Accrual: Codable, Equatable { public var provider: String; public var label: String; public var amount: Amount }
+    public struct Budget: Codable, Equatable { public var monthly: Amount; public var spentIncludingAccruing: Amount; public var percentUsed: Int; public var complete: Bool }
+
     public struct Overview: Codable, Equatable {
         public var generatedAt: Date
         public var balances: [Balance]
@@ -81,6 +84,9 @@ public enum AgentReport {
         public var paidTotalConverted: Amount?
         public var conversionNote: String?
         public var paymentCoverage: String
+        /// Pay-as-you-go usage building up this month (Azure and similar), not yet invoiced.
+        public var accruingThisMonth: [Accrual]
+        public var budget: Budget?
         public var upcomingRenewals: [Renewal]
         public var accountsNeedingAttention: [String]
         public var note: String
@@ -179,6 +185,14 @@ public enum AgentReport {
             paidTotalConverted: converted.0,
             conversionNote: converted.1,
             paymentCoverage: state.coverageDescription,
+            accruingThisMonth: state.accruingThisMonth(now: now).map {
+                Accrual(provider: Catalogue.integration($0.account.integrationID)?.name ?? $0.account.integrationID, label: $0.account.label, amount: Amount($0.amount))
+            },
+            budget: state.monthlyBudget.map { budget in
+                let spent = state.monthToDateSpend(in: budget.currency, rates: rates, now: now, includeAccruing: true)
+                let percent = budget.amount > 0 ? Int((NSDecimalNumber(decimal: spent.spent.amount / budget.amount).doubleValue * 100).rounded()) : 0
+                return Budget(monthly: Amount(budget), spentIncludingAccruing: Amount(spent.spent), percentUsed: percent, complete: spent.complete)
+            },
             upcomingRenewals: renewals(state, withinDays: 30, now: now),
             accountsNeedingAttention: balances.filter { $0.lastError != nil || $0.stale }.map { "\($0.provider) · \($0.label)" },
             note: "Values are the last readings saved by the Unifai app. Credit remaining, money paid and expected renewals are separate measures; do not add them together or across currencies.")

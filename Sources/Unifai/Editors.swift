@@ -31,11 +31,13 @@ struct AccountEditor: View {
     @State private var error: String?
     @State private var signingIn = false
     @State private var signInStatus: String?
+    @State private var alertBelow = ""
     init(integration: Integration, account: ConnectedAccount?) {
         self.integration = integration; self.account = account
         _label = State(initialValue: account?.label ?? "")
         _owner = State(initialValue: account?.billingScope ?? "")
         _mode = State(initialValue: account?.mode ?? (integration.status == .ready ? .live : .manual))
+        _alertBelow = State(initialValue: account?.lowBalanceAlert.map { "\($0)" } ?? "")
     }
     var body: some View {
         EditorFrame(title: account == nil ? "Add \(integration.name)" : "Edit \(integration.name)", saveLabel: account == nil ? "Add Account" : "Save Account", error: error, save: save) {
@@ -50,17 +52,14 @@ struct AccountEditor: View {
             } footer: { Text("Connect each billing owner once. Two keys for the same owner share one balance.") }
             if mode == .live && !integration.needsCredential {
                 Section {
-                    Label(integration.id == "codex" ? "Uses the Codex app on this Mac" : "Uses Claude Code on this Mac", systemImage: "terminal")
-                    Text(integration.id == "codex"
-                         ? "Unifai asks Codex for your ChatGPT plan, Codex usage windows and credits. Codex keeps the sign-in; Unifai stores no OpenAI password or token."
-                         : "Unifai asks Claude Code which plan you are signed in to. Claude Code keeps the sign-in; Unifai never reads its token. Anthropic does not share subscription usage limits with other apps.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Label(localToolTitle, systemImage: "terminal")
+                    Text(localToolText).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(SignIn.title(integration.id)) { startSignIn() }.disabled(signingIn)
                         if signingIn { ProgressView().controlSize(.small) }
                         if let signInStatus { Text(signInStatus).font(.caption).foregroundStyle(.secondary) }
                     }
-                } footer: { Text(integration.id == "codex" ? "Already signed in to Codex? Skip this and add the account." : "Already signed in to Claude Code? Skip this and add the account.") }
+                } footer: { Text("Already signed in to \(integration.id == "codex" ? "Codex" : integration.id == "azure-subscription" ? "the Azure CLI" : "Claude Code")? Skip this and add the account.") }
             } else if mode == .live {
                 Section {
                     SecureField(account == nil ? "Credential" : "Replace Credential", text: $credential, prompt: Text(account == nil ? (integration.id == "openai-api" ? "sk-admin-..." : integration.id == "claude-api" ? "sk-ant-admin01-..." : "Paste a key") : "Leave blank to keep the saved key"))
@@ -68,7 +67,26 @@ struct AccountEditor: View {
                     Text(credentialHint).font(.caption).foregroundStyle(.secondary)
                 } footer: { Text("Saved per account in macOS Keychain. No refresh occurs until you click Refresh. In a synthetic workspace, keys stay in memory and requests use fixtures.") }
             }
+            if let account, account.mode == .live, let balance = account.snapshot?.balances.first {
+                Section {
+                    TextField("Alert when credit falls below", text: $alertBelow, prompt: Text(Notifier.defaultThreshold(for: balance.currency).description))
+                } footer: { Text("In \(balance.currency). Leave blank for the default of \(Notifier.defaultThreshold(for: balance.currency)) \(balance.currency).") }
+            }
             Section { Text(integration.limitation).font(.callout).foregroundStyle(.secondary) }
+        }
+    }
+    private var localToolTitle: String {
+        switch integration.id {
+        case "codex": return "Uses the Codex app on this Mac"
+        case "azure-subscription": return "Uses the Azure CLI on this Mac"
+        default: return "Uses Claude Code on this Mac"
+        }
+    }
+    private var localToolText: String {
+        switch integration.id {
+        case "codex": return "Unifai asks Codex for your ChatGPT plan, Codex usage windows and credits. Codex keeps the sign-in; Unifai stores no OpenAI password or token."
+        case "azure-subscription": return "Unifai runs read-only cost queries with az for every enabled subscription. The Azure CLI keeps the sign-in; Unifai stores no Azure credential. The signed-in account needs Cost Management Reader or Reader."
+        default: return "Unifai asks Claude Code which plan you are signed in to. Claude Code keeps the sign-in; Unifai never reads its token. Anthropic does not share subscription usage limits with other apps."
         }
     }
     private func startSignIn() {
@@ -91,7 +109,15 @@ struct AccountEditor: View {
     }
     private func save() {
         do {
-            if let account { try store.updateAccount(account.id, label: label, credential: credential) }
+            if let account {
+                try store.updateAccount(account.id, label: label, credential: credential)
+                let threshold = alertBelow.trimmingCharacters(in: .whitespaces)
+                if threshold.isEmpty { try store.setLowBalanceAlert(account.id, below: nil) }
+                else {
+                    guard let value = Money.parseAmount(threshold) else { throw ValidationError.message("Enter an alert amount like 5.00, or leave it blank.") }
+                    try store.setLowBalanceAlert(account.id, below: value)
+                }
+            }
             else { try store.addAccount(integrationID: integration.id, label: label, billingScope: owner, mode: mode, credential: credential) }
             credential = ""; dismiss()
         } catch { self.error = error.localizedDescription }
@@ -241,5 +267,62 @@ struct CoverageEditor: View {
     private func save() {
         do { try store.setCoverage(start: Calendar.current.startOfDay(for: start), complete: complete); dismiss() }
         catch { self.error = error.localizedDescription }
+    }
+}
+
+/// App settings: display currency, monthly budget, background refresh and notifications.
+struct SettingsEditor: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var displayCurrency = ""
+    @State private var budgetAmount = ""
+    @State private var budgetCurrency = ""
+    @State private var autoRefresh = true
+    @State private var notifications = true
+    @State private var error: String?
+    private var currencies: [String] {
+        let recorded = Set(store.state.payments.map(\.money.currency))
+        return Array(recorded.union(["SGD", "USD", "EUR", "GBP", "CNY", "JPY"]).union([Locale.current.currency?.identifier ?? "USD"])).filter { Money.validCurrency($0) }.sorted()
+    }
+    var body: some View {
+        EditorFrame(title: "Settings", saveLabel: "Save Settings", error: error, save: save) {
+            Section {
+                Picker("Show spending in", selection: $displayCurrency) {
+                    Text("Each currency separately").tag("")
+                    ForEach(currencies, id: \.self) { Text("All in \($0)").tag($0) }
+                }
+            } header: { Text("Currency") } footer: { Text("Combined figures convert each payment at the European Central Bank rate for its date. Recorded amounts never change.") }
+            Section {
+                TextField("Monthly AI and cloud budget", text: $budgetAmount, prompt: Text("Leave blank for no budget"))
+                Picker("Budget currency", selection: $budgetCurrency) { ForEach(currencies, id: \.self) { Text($0).tag($0) } }
+            } header: { Text("Budget") } footer: { Text("Overview shows this month's payments against the budget, and you get a notification at 80% and 100%.") }
+            Section {
+                Toggle("Refresh wallets in the background every hour", isOn: $autoRefresh)
+                Toggle("Notifications", isOn: $notifications)
+            } header: { Text("Automation") } footer: { Text("Notifications cover low credit, failed refreshes, renewals due tomorrow, recorded renewals, usage limits resetting and your budget. Everything is computed on this Mac.") }
+        }
+        .onAppear {
+            displayCurrency = store.state.displayCurrency ?? ""
+            budgetAmount = store.state.monthlyBudget.map { "\($0.amount)" } ?? ""
+            budgetCurrency = store.state.monthlyBudget?.currency ?? store.state.displayCurrency ?? Locale.current.currency?.identifier ?? "USD"
+            autoRefresh = store.state.autoRefresh != false
+            notifications = Notifier.shared.enabled
+        }
+    }
+    private func save() {
+        do {
+            let trimmed = budgetAmount.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { try store.setMonthlyBudget(nil) }
+            else {
+                guard let amount = Money.parseAmount(trimmed) else { throw ValidationError.message("Enter a budget like 400.00, or leave it blank.") }
+                try store.setMonthlyBudget(Money(amount, budgetCurrency))
+            }
+            try store.setAutoRefresh(autoRefresh)
+            Notifier.shared.enabled = notifications
+            let target = displayCurrency.isEmpty ? nil : displayCurrency
+            if target != store.state.displayCurrency { Task { await store.setDisplayCurrency(target) } }
+            Notifier.shared.evaluate(store)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
     }
 }

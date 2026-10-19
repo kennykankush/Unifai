@@ -31,6 +31,7 @@ public struct BalanceClient {
     public func fetch(integrationID: String, credential: String, now: Date = .now) async throws -> BalanceSnapshot {
         if integrationID == "codex" { return try await CodexClient().fetch(now: now) }
         if integrationID == "claude-subscription" { return try await ClaudeCodeClient().fetch(now: now) }
+        if integrationID == "azure-subscription" { return try await AzureCostClient().fetch(now: now) }
         guard !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ConnectorError.missingCredential }
         let endpoint: String
         switch integrationID {
@@ -255,6 +256,24 @@ public enum LocalTool {
                           "\(home)/.bun/bin/\(name)", "\(home)/.volta/bin/\(name)"] + extra
         return candidates.lazy.map { URL(fileURLWithPath: $0) }.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
+    /// Runs a tool and returns its standard output, or throws with the start of standard error.
+    static func run(_ tool: URL, _ arguments: [String], timeout: TimeInterval = 30) throws -> (output: Data, error: String, status: Int32) {
+        let process = Process(), output = Pipe(), errors = Pipe()
+        process.executableURL = tool; process.arguments = arguments
+        process.environment = environment(for: tool)
+        process.standardOutput = output; process.standardError = errors; process.standardInput = FileHandle.nullDevice
+        try process.run()
+        var collected = Data()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            let chunk = output.fileHandleForReading.availableData
+            if chunk.isEmpty { Thread.sleep(forTimeInterval: 0.05) } else { collected.append(chunk) }
+        }
+        if process.isRunning { process.terminate(); throw ValidationError.message("\(tool.lastPathComponent) did not answer in time.") }
+        collected.append(output.fileHandleForReading.readDataToEndOfFile())
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return (collected, String(message.prefix(400)), process.terminationStatus)
+    }
     static func environment(for tool: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = [tool.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", environment["PATH"] ?? ""].joined(separator: ":")
@@ -459,5 +478,97 @@ public struct ClaudeCodeClient {
         return BalanceSnapshot(balances: [], observedAt: now, source: source,
                                coverage: "Plan read from Claude Code on this Mac (claude auth status). Anthropic does not offer subscription usage limits to other apps; run /usage in Claude Code to see them.",
                                plan: plan)
+    }
+}
+
+/// Reads month-to-date Azure spend through the Azure CLI (`az rest` to the Cost Management query API).
+/// The CLI owns the sign-in; Unifai never sees an Azure token. Only read-only queries are sent.
+public struct AzureCostClient {
+    public init() {}
+    public static let source = URL(string: "https://learn.microsoft.com/en-us/rest/api/cost-management/query/usage")!
+    public static func locate() -> URL? { LocalTool.locate("az") }
+
+    struct Subscription: Decodable { let id: String; let name: String }
+
+    public func fetch(now: Date = .now) async throws -> BalanceSnapshot {
+        guard let az = Self.locate() else { throw ValidationError.message("The Azure CLI is not installed. Install it with brew install azure-cli, run az login, then refresh.") }
+        let results = try await Task.detached { () throws -> [(String, Data)] in
+            let list = try LocalTool.run(az, ["account", "list", "--query", "[?state=='Enabled'].{id:id,name:name}", "-o", "json", "--only-show-errors"], timeout: 60)
+            guard list.status == 0 else { throw Self.cliError(list.error) }
+            let subscriptions = (try? JSONDecoder().decode([Subscription].self, from: list.output)) ?? []
+            guard !subscriptions.isEmpty else { throw ValidationError.message("No enabled Azure subscriptions. Run az login with the account that owns them, then refresh.") }
+            let body = #"{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}"#
+            return try subscriptions.prefix(10).map { subscription in
+                let url = "https://management.azure.com/subscriptions/\(subscription.id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+                let arguments = ["rest", "--method", "post", "--url", url, "--body", body, "--only-show-errors"]
+                var result = try LocalTool.run(az, arguments, timeout: 90)
+                // Cost Management allows only a few queries per minute per scope; wait once and retry.
+                if result.status != 0, result.error.contains("429") {
+                    Thread.sleep(forTimeInterval: 12)
+                    result = try LocalTool.run(az, arguments, timeout: 90)
+                }
+                guard result.status == 0 else { throw Self.cliError(result.error) }
+                return (subscription.name, result.output)
+            }
+        }.value
+        return try Self.decode(results, now: now)
+    }
+
+    static func cliError(_ message: String) -> Error {
+        if message.localizedCaseInsensitiveContains("az login") || message.localizedCaseInsensitiveContains("expired") {
+            return ValidationError.message("The Azure CLI sign-in has expired. Run az login in Terminal, then refresh.")
+        }
+        if message.contains("429") || message.localizedCaseInsensitiveContains("throttl") { return ConnectorError.rateLimited }
+        if message.localizedCaseInsensitiveContains("AuthorizationFailed") || message.contains("403") {
+            return ValidationError.message("Azure refused the cost query. The signed-in account needs Cost Management Reader (or Reader) on the subscription.")
+        }
+        return ValidationError.message("The Azure cost query failed. Check that az works in Terminal, then refresh.")
+    }
+
+    struct QueryResult: Decodable {
+        struct Properties: Decodable {
+            struct Column: Decodable { let name: String }
+            let columns: [Column]
+            let rows: [[CostValue]]
+        }
+        let properties: Properties
+    }
+    enum CostValue: Decodable {
+        case number(Double), text(String)
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(Double.self) { self = .number(value) } else { self = .text((try? container.decode(String.self)) ?? "") }
+        }
+        var number: Double? { if case .number(let value) = self { return value }; return nil }
+        var text: String { switch self { case .number(let value): return String(value); case .text(let value): return value } }
+    }
+
+    public static func decode(_ results: [(String, Data)], now: Date = .now) throws -> BalanceSnapshot {
+        var totals: [String: Decimal] = [:]
+        var services: [String: [String: Decimal]] = [:]
+        for (_, data) in results {
+            guard let query = try? JSONDecoder().decode(QueryResult.self, from: data) else { throw ConnectorError.invalidResponse }
+            let names = query.properties.columns.map(\.name)
+            guard let cost = names.firstIndex(where: { $0 == "Cost" || $0 == "PreTaxCost" || $0 == "CostUSD" }),
+                  let currency = names.firstIndex(of: "Currency") else { throw ConnectorError.invalidResponse }
+            let service = names.firstIndex(of: "ServiceName")
+            for row in query.properties.rows where row.count > max(cost, currency) {
+                guard let value = row[cost].number, value.isFinite else { continue }
+                let code = row[currency].text.uppercased()
+                guard Money.validCurrency(code) else { throw ConnectorError.invalidResponse }
+                let amount = Decimal(string: String(format: "%.6f", value)) ?? Decimal(value)
+                totals[code, default: 0] += amount
+                if let service { services[code, default: [:]][row[service].text, default: 0] += amount }
+            }
+        }
+        if totals.isEmpty { totals["USD"] = 0 }
+        let primary = totals.max { $0.value < $1.value }!.key
+        let top = (services[primary] ?? [:]).sorted { $0.value > $1.value }.prefix(3)
+            .map { BalanceDetail($0.key.isEmpty ? "Other" : $0.key, Money($0.value, primary)) }
+        let count = results.count
+        return BalanceSnapshot(balances: [], details: Array(top), reportedConsumption: totals.keys.sorted().map { Money(totals[$0]!, $0) },
+                               observedAt: now, source: source,
+                               coverage: "Month-to-date actual cost from Azure Cost Management for \(count) enabled subscription\(count == 1 ? "" : "s"), read through the Azure CLI. Costs can lag by several hours and exclude credits, invoices and taxes.",
+                               consumptionPeriod: "This month")
     }
 }

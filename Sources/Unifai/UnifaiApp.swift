@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UnifaiCore
 
 @main
@@ -69,6 +70,9 @@ struct UnifaiApp: App {
 struct MainWindowCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings...") { openWindow(id: "main"); AppRuntime.openSettings?() }.keyboardShortcut(",", modifiers: .command)
+        }
         CommandGroup(after: .newItem) {
             Button("Show Unifai") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }.keyboardShortcut("1", modifiers: .command)
             Button("Show Companion") { AppRuntime.showCompanion?() }.keyboardShortcut("m", modifiers: [.command, .shift])
@@ -112,6 +116,7 @@ struct MainWindowCommands: Commands {
     }
     static var showCompanion: (() -> Void)?
     static var openMain: (() -> Void)?
+    static var openSettings: (() -> Void)?
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -120,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         if let icon = AppIconArtwork.render() { NSApp.applicationIconImage = icon }
+        Notifier.shared.start()
         if let store = AppRuntime.store {
             companion = MenuBarController(store: store, fixtureMode: AppRuntime.fixtureMode)
             AppRuntime.showCompanion = { [weak self] in self?.companion?.toggle() }
@@ -152,6 +158,16 @@ struct MenuPanel: View {
                     ZStack(alignment: .topLeading) {
                         MeshBackdrop(colors: Palette.hero)
                         VStack(alignment: .leading, spacing: 6) {
+                            if let currency = store.state.monthlyBudget?.currency ?? store.state.displayCurrency {
+                                let month = store.state.monthToDateSpend(in: currency, rates: store.rates, includeAccruing: true).spent
+                                Text("This month, including usage so far").font(.system(size: 11, weight: .semibold)).opacity(0.85)
+                                MoneyText(money: month, size: 22, weight: .heavy)
+                                if let budget = store.state.monthlyBudget {
+                                    UsageMeter(used: budget.amount > 0 ? NSDecimalNumber(decimal: month.amount / budget.amount).doubleValue : 0, tint: Palette.lime)
+                                    Text("of \(budget.amountText) \(budget.currency) budget").font(.system(size: 10, weight: .medium)).opacity(0.75)
+                                }
+                                Divider().overlay(Color.white.opacity(0.3))
+                            }
                             Text("Total paid for AI").font(.system(size: 12, weight: .semibold)).opacity(0.85)
                             if totals.isEmpty { Text("Nothing yet").font(.system(size: 24, weight: .heavy)) }
                             ForEach(totals) { MoneyText(money: $0, size: totals.count > 1 ? 22 : 28, weight: .heavy) }
@@ -160,7 +176,7 @@ struct MenuPanel: View {
                         .padding(16)
                     }
                     .foregroundStyle(.white)
-                    .frame(height: totals.count > 1 ? 136 : 112)
+                    .frame(height: (totals.count > 1 ? 136 : 112) + (store.state.monthlyBudget != nil ? 90 : store.state.displayCurrency != nil ? 62 : 0))
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     Text("Wallets").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
                     if store.state.accounts.isEmpty { Text("No accounts connected").font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -206,9 +222,13 @@ struct MenuPanel: View {
 @MainActor final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
+    private var observation: AnyCancellable?
+    private weak var store: AppStore?
     init(store: AppStore, fixtureMode: Bool) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.store = store
         super.init()
+        observation = store.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.updateTitle() } }
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 340, height: 500)
         popover.contentViewController = NSHostingController(rootView: MenuPanel(fixtureMode: fixtureMode).environmentObject(store))
@@ -219,7 +239,25 @@ struct MenuPanel: View {
             button.toolTip = "Unifai"
             button.setAccessibilityLabel("Unifai")
             button.target = self; button.action = #selector(toggle)
+            button.imagePosition = .imageLeading
         }
+        updateTitle()
+    }
+
+    /// Menu bar text: this month's spend (with pay-as-you-go usage) and Codex's weekly usage when connected.
+    private func updateTitle() {
+        guard let store, let button = statusItem.button else { return }
+        let currency = store.state.monthlyBudget?.currency ?? store.state.displayCurrency ?? SpendSeries.currencies(store.state.payments).first
+        var parts: [String] = []
+        if let currency {
+            let spent = store.state.monthToDateSpend(in: currency, rates: store.rates, includeAccruing: true).spent
+            parts.append("\(currency) \(Int(NSDecimalNumber(decimal: spent.amount).doubleValue.rounded()))")
+        }
+        if let weekly = store.state.accounts.first(where: { $0.integrationID == "codex" })?.snapshot?.allowances?.first(where: { $0.windowMinutes == 10080 }) {
+            parts.append("Codex \(weekly.usedPercent)%")
+        }
+        button.attributedTitle = NSAttributedString(string: parts.isEmpty ? "" : " " + parts.joined(separator: " · "),
+                                                    attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)])
     }
     @objc func toggle() {
         if popover.isShown { popover.performClose(nil) }

@@ -41,7 +41,10 @@ enum Palette {
         case "openai-api", "chatgpt", "codex": return [hex(0x0A6E55), hex(0x12A07C), hex(0x3CCB9F)]
         case "claude-api", "claude-subscription": return [hex(0xA8401F), hex(0xD8693F), hex(0xEE9466)]
         case "gemini-api", "gemini-consumer", "gemini-cli", "vertex": return [hex(0x2F5BD8), hex(0x7A5CE8), hex(0xC77ADB)]
-        case "cursor", "github-releases", "github-private", "github-stars", "copilot", "x-accounts", "x-for-you", "xai":
+        case "azure-subscription": return [hex(0x0B4FB3), hex(0x1C7BE0), hex(0x3FA2F2)]
+        case "aws": return [hex(0x9A5A0C), hex(0xD18419), hex(0xEFA53A)]
+        case "gcp": return [hex(0x1F5BC6), hex(0x2F8E5A), hex(0xE0A93A)]
+        case "cursor", "github-releases", "github-private", "github-stars", "copilot", "x-accounts", "x-for-you", "xai", "vercel":
             return [hex(0x23242B), hex(0x383A45), hex(0x5A5D6B)]
         case nil: return [hex(0x2C2D36), hex(0x41434F), hex(0x6A6D7C)]
         default:
@@ -99,6 +102,13 @@ enum Logos {
         case "roo": return "roocode"
         case "kiro": return "kiro-color"
         case "local": return "ollama"
+        case "azure-subscription": return "azure-color"
+        case "aws": return "aws-color"
+        case "gcp": return "googlecloud-color"
+        case "vercel": return "vercel"
+        case "cloudflare": return "cloudflare-color"
+        case "digitalocean": return "digitalocean"
+        case "railway": return "railway"
         default: return nil
         }
     }
@@ -112,6 +122,10 @@ enum Logos {
         case "newsletters": return "envelope"
         case "zed", "continue": return "chevron.left.forwardslash.chevron.right"
         case "custom": return "plus.square.dashed"
+        case "hetzner", "other-cloud": return "server.rack"
+        case "fly", "render", "netlify": return "cloud"
+        case "supabase", "neon": return "cylinder.split.1x2"
+        case "domains": return "globe"
         default: return "sparkles"
         }
     }
@@ -599,7 +613,8 @@ struct WalletCard: View {
                     Text(balance.currency == "CREDITS" ? "Codex credits" : "Available").font(.system(size: 11, weight: .medium)).opacity(0.7)
                     MoneyText(money: balance, size: 24)
                 } else if let snapshot = account.snapshot, let spent = snapshot.reportedConsumption.first {
-                    Text("Spent, \((snapshot.consumptionPeriod ?? "reported").lowercased())").font(.system(size: 11, weight: .medium)).opacity(0.7)
+                    Text(Catalogue.integration(account.integrationID)?.billing == .payAsYouGo ? "Usage \((snapshot.consumptionPeriod ?? "so far").lowercased())" : "Spent, \((snapshot.consumptionPeriod ?? "reported").lowercased())")
+                        .font(.system(size: 11, weight: .medium)).opacity(0.7)
                     MoneyText(money: spent, size: 24)
                 } else if let plan = account.snapshot?.plan {
                     Text("Plan").font(.system(size: 11, weight: .medium)).opacity(0.7)

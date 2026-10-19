@@ -1,10 +1,22 @@
 import Foundation
 
 public enum IntegrationCategory: String, CaseIterable, Identifiable {
-    case providers = "Model APIs", subscriptions = "Subscriptions & tools", development = "Development", discovery = "News & discovery"
+    case providers = "Model APIs", subscriptions = "Subscriptions & tools", cloud = "Cloud & infrastructure", development = "Development", discovery = "News & discovery"
     public var id: String { rawValue }
 }
 public enum IntegrationStatus: String { case ready = "Ready to connect", manual = "Manual records", planned = "Planned" }
+
+/// How a service charges, which decides how Unifai counts it.
+public enum BillingModel: String, CaseIterable {
+    /// Top up first, spend down (OpenRouter, DeepSeek, Claude API).
+    case prepaid = "Prepaid credits"
+    /// Fixed recurring charge (ChatGPT, Cursor, domains).
+    case subscription = "Subscription"
+    /// A plan with usage windows or allowances (Codex, Claude subscriptions).
+    case allowance = "Plan with usage limits"
+    /// Usage accrues and is invoiced after the period (Azure, AWS, Google Cloud).
+    case payAsYouGo = "Pay as you go"
+}
 public enum RouteEvidence: String {
     case documented = "Official route documented", partial = "Partial coverage", reference = "Implementation reference", unverified = "Access unverified"
 }
@@ -19,11 +31,22 @@ public struct Integration: Identifiable {
     public var limitation: String
     public var source: URL?
     /// Codex and Claude Code sign in through their own apps, so Unifai stores no credential for them.
-    public var needsCredential: Bool { id != "codex" && id != "claude-subscription" }
+    public var billing: BillingModel {
+        switch id {
+        case "openrouter", "deepseek", "claude-api", "openai-api", "kimi", "minimax", "zai", "dashscope": return .prepaid
+        case "codex", "claude-subscription": return .allowance
+        case "azure-subscription", "azure", "bedrock", "vertex", "aws", "gcp", "digitalocean", "hetzner", "railway", "fly", "render", "other-cloud",
+             "groq", "mistral", "together", "fireworks", "replicate", "huggingface", "fal", "xai", "perplexity-api", "elevenlabs", "stability", "gemini-api":
+            return .payAsYouGo
+        default: return .subscription
+        }
+    }
+    public var needsCredential: Bool { !["codex", "claude-subscription", "azure-subscription"].contains(id) }
     public var symbol: String {
         switch category {
         case .providers: return "cpu"
         case .subscriptions: return "person.crop.rectangle"
+        case .cloud: return "cloud"
         case .development: return "chevron.left.forwardslash.chevron.right"
         case .discovery: return "newspaper"
         }
@@ -76,7 +99,7 @@ public enum Catalogue {
             ("replicate", "Replicate"), ("huggingface", "Hugging Face"), ("fal", "fal"),
             ("elevenlabs", "ElevenLabs"), ("stability", "Stability AI"), ("dashscope", "Alibaba / DashScope"),
             ("kimi", "Moonshot / Kimi"), ("minimax", "MiniMax"), ("zai", "Z.ai"),
-            ("azure", "Azure AI / Foundry"), ("bedrock", "AWS Bedrock"), ("vertex", "Google Vertex AI")
+            ("azure", "Azure AI / Foundry (manual)"), ("bedrock", "AWS Bedrock"), ("vertex", "Google Vertex AI")
         ]
         let tools = [
             ("copilot", "GitHub Copilot"), ("gemini-consumer", "Gemini subscription"), ("gemini-cli", "Gemini CLI"),
@@ -89,6 +112,18 @@ public enum Catalogue {
                                status: .manual, evidence: .unverified, method: "Manual confirmed records",
                                capabilities: "Record payments and expected subscription renewals",
                                limitation: "Automatic billing, balances and allowance access have not been verified or implemented. Local usage paid through another provider must not be counted again.", source: nil))
+        }
+        items.append(.init(id: "azure-subscription", name: "Azure subscriptions", category: .cloud, status: .ready, evidence: .documented,
+                           method: "Local Azure CLI · your existing az login", capabilities: "Month-to-date spend per currency across enabled subscriptions, with the top services (VMs, storage, Foundry models)",
+                           limitation: "Reads through the Azure CLI on this Mac (az rest to the Cost Management query API), so install it and run az login first. Unifai stores no Azure credential. Costs can lag by several hours; credits and invoices are not included.",
+                           source: URL(string: "https://learn.microsoft.com/en-us/rest/api/cost-management/query/usage")))
+        let cloud = [("aws", "AWS"), ("gcp", "Google Cloud"), ("vercel", "Vercel"), ("cloudflare", "Cloudflare"), ("digitalocean", "DigitalOcean"),
+                     ("hetzner", "Hetzner"), ("railway", "Railway"), ("fly", "Fly.io"), ("render", "Render"), ("supabase", "Supabase"),
+                     ("neon", "Neon"), ("netlify", "Netlify"), ("domains", "Domains & DNS"), ("other-cloud", "Other hosting or servers")]
+        for (id, name) in cloud {
+            items.append(.init(id: id, name: name, category: .cloud, status: .manual, evidence: .unverified, method: "Manual confirmed records and renewals",
+                               capabilities: "Record invoices, top-ups and recurring plans; import from CSV",
+                               limitation: "No live connector yet. Record invoices or import them, and add a schedule for fixed monthly plans.", source: nil))
         }
         let sources = [("rss", "Blogs & changelogs"), ("status", "Provider status pages"), ("papers", "Papers & model releases"), ("newsletters", "Newsletters, video & podcasts")]
         for (id, name) in sources {

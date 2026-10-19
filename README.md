@@ -61,6 +61,8 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 | Claude subscription / Code | Claude plan (Pro, Max, Team) and sign-in state | Install Claude Code, then **Sign in with Claude** (opens `claude auth login` in Terminal). Anthropic does not share subscription usage limits with other apps, so those stay in Claude Code's `/usage`. |
 | Claude API / Console | API spend for the last 30 days | Enter an Admin key (`sk-ant-admin01-...`), which Anthropic only issues to Console organizations. Unifai only calls the Cost API; Anthropic has no remaining-credit endpoint, so import credit top-ups from receipts. |
 | OpenAI API Platform | API spend per currency for the last 30 days | Enter an organization Admin key (`sk-admin-...`). Unifai only calls the Costs API; OpenAI has no prepaid balance endpoint. |
+| Azure subscriptions | Month-to-date spend per currency across enabled subscriptions, with the top services | Install the Azure CLI and run `az login` (or **Sign in with Azure**). Unifai runs read-only Cost Management queries through `az` and stores no Azure credential. The account needs Cost Management Reader or Reader. |
+| AWS, Google Cloud, Vercel, Cloudflare, DigitalOcean, Hetzner and other hosting | Invoices, top-ups and recurring plans | Manual wallets under **Cloud & infrastructure**; import invoices from CSV and add schedules for fixed plans. |
 | Manual financial accounts | Payments, refunds and expected renewals | Add confirmed records from receipts. Automatic balances and allowances remain unavailable. |
 | Public GitHub releases | Latest 50 published releases, original links, optional prereleases | Add `owner/repository`, then click Refresh. No credential is accepted or needed. |
 
@@ -79,6 +81,19 @@ In **Subscriptions**, save an expected amount, cadence and renewal date. A sched
 Spending can be combined into one currency: choose **Combine** on the Overview card (or **All in …** from any currency menu). Each payment is converted at the European Central Bank reference rate for its own date, downloaded once a day from the ECB data API and cached as `exchange-rates.json`. Combined figures are labelled approximate because card issuers use their own rates; recorded amounts never change, and **Each currency separately** turns conversion off. The MCP server adds `paidTotalConverted` when conversion is on.
 
 Money paid, provider-reported consumption, remaining credit and expected renewals stay separate. A USD 100 top-up followed by USD 30 of consumption is USD 100 paid and USD 70 remaining. Currencies are only combined in the optional converted view. Payment history shows its start and whether you have confirmed completeness for that period; it does not claim a lifetime total from a current balance.
+
+## Billing models, budget and alerts
+
+Every service is tagged with how it charges, and Unifai counts each accordingly:
+
+| Model | Examples | How it is counted |
+| --- | --- | --- |
+| Prepaid credits | OpenRouter, DeepSeek, Claude API, OpenAI API | Top-ups are payments; the wallet shows remaining credit |
+| Subscription | ChatGPT, Cursor, domains | Schedules record each renewal automatically on its date |
+| Plan with usage limits | ChatGPT & Codex, Claude | Plan plus usage windows and reset times |
+| Pay as you go | Azure, AWS, Google Cloud | Usage this month shows as accruing; at month end the last reading is recorded as an Estimate until the invoice is imported |
+
+Open **Settings** (Command-comma) to set the display currency, a monthly budget, background refresh and notifications. With background refresh on, live wallets update every hour while Unifai runs. Notifications cover low credit (per-wallet thresholds in **Edit**), failed refreshes, renewals due tomorrow, recorded renewals, usage limits resetting, and 80% and 100% of the budget. The menu bar shows this month's spend, including pay-as-you-go usage, and Codex's weekly usage.
 
 ## Let agents read your balances (MCP)
 

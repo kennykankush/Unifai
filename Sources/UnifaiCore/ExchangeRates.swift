@@ -97,3 +97,33 @@ public extension PersistentState {
         return (converted, unconverted)
     }
 }
+
+public extension PersistentState {
+    /// Payments this calendar month expressed in `currency`. Other currencies are converted when
+    /// rates are available; `complete` is false when some could not be converted.
+    /// Usage building up this month on pay-as-you-go wallets, not yet invoiced or paid.
+    func accruingThisMonth(now: Date = .now) -> [(account: ConnectedAccount, amount: Money)] {
+        guard let start = Calendar.current.dateInterval(of: .month, for: now)?.start else { return [] }
+        return accounts.compactMap { account -> [(ConnectedAccount, Money)]? in
+            guard Catalogue.integration(account.integrationID)?.billing == .payAsYouGo, let snapshot = account.snapshot,
+                  snapshot.consumptionPeriod == "This month", snapshot.observedAt >= start else { return nil }
+            return snapshot.reportedConsumption.filter { $0.amount > 0 }.map { (account, $0) }
+        }.flatMap { $0 }.map { (account: $0.0, amount: $0.1) }
+    }
+
+    func monthToDateSpend(in currency: String, rates: RateTable?, now: Date = .now, includeAccruing: Bool = false) -> (spent: Money, complete: Bool) {
+        guard let start = Calendar.current.dateInterval(of: .month, for: now)?.start else { return (Money(0, currency), true) }
+        var total: Decimal = 0, complete = true
+        if includeAccruing {
+            for (_, amount) in accruingThisMonth(now: now) {
+                if let money = amount.currency == currency ? amount : rates?.convert(amount, to: currency, on: now) { total += money.amount } else { complete = false }
+            }
+        }
+        for payment in payments where payment.paidAt >= start && payment.paidAt <= now {
+            let money = payment.money.currency == currency ? payment.money : rates?.convert(payment.money, to: currency, on: payment.paidAt)
+            guard let money else { complete = false; continue }
+            total += payment.kind == .refund ? -money.amount : money.amount
+        }
+        return (Money(total, currency), complete)
+    }
+}

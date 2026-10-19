@@ -130,6 +130,13 @@ public final class AppStore: ObservableObject {
                 }
                 let record = PaymentRecord(accountID: accountID, description: row.description, kind: row.kind, money: row.money, paidAt: row.paidAt, reference: row.reference)
                 let day = Calendar.current.startOfDay(for: row.paidAt)
+                // A real invoice supersedes Unifai's month-end usage estimate for that wallet.
+                if row.kind == .usageCharge, let accountID {
+                    let before = next.payments.count
+                    next.payments.removeAll { $0.estimated == true && $0.accountID == accountID && $0.money.currency == row.money.currency
+                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 20 * 86400 }
+                    summary.replaced += before - next.payments.count
+                }
                 // A real receipt supersedes the automatic entry for the same renewal.
                 if row.kind == .subscription, let accountID {
                     let before = next.payments.count
@@ -208,9 +215,41 @@ public final class AppStore: ObservableObject {
         return recorded
     }
 
-    /// Marks an automatically recorded renewal as confirmed by the user.
+    /// Marks an automatically recorded payment as confirmed by the user.
     public func confirmPayment(_ id: UUID) throws {
-        try change { next in if let index = next.payments.firstIndex(where: { $0.id == id }) { next.payments[index].scheduleID = nil } }
+        try change { next in
+            if let index = next.payments.firstIndex(where: { $0.id == id }) { next.payments[index].scheduleID = nil; next.payments[index].estimated = nil }
+        }
+    }
+
+    /// For pay-as-you-go wallets whose last month-to-date reading belongs to an earlier month,
+    /// records that reading as the period's usage charge, marked Auto as an estimate. An
+    /// imported invoice replaces it. Each wallet and month is recorded once.
+    @discardableResult
+    public func closePayAsYouGoPeriods(now: Date = .now) -> [PaymentRecord] {
+        guard loadFailure == nil else { return [] }
+        let calendar = Calendar.current
+        guard let thisMonth = calendar.dateInterval(of: .month, for: now)?.start else { return [] }
+        var recorded: [PaymentRecord] = []
+        do {
+            try change { next in
+                for account in next.accounts where account.mode == .live && Catalogue.integration(account.integrationID)?.billing == .payAsYouGo {
+                    guard let snapshot = account.snapshot, snapshot.consumptionPeriod == "This month", snapshot.observedAt < thisMonth,
+                          let period = calendar.dateInterval(of: .month, for: snapshot.observedAt) else { continue }
+                    let monthName = period.start.formatted(.dateTime.month(.wide).year())
+                    for spent in snapshot.reportedConsumption where spent.amount > 0 {
+                        let reference = "auto-usage-\(account.id.uuidString.prefix(8))-\(period.start.formatted(.iso8601.year().month()))-\(spent.currency)"
+                        guard !next.payments.contains(where: { $0.reference == reference }) else { continue }
+                        let name = Catalogue.integration(account.integrationID)?.name ?? account.integrationID
+                        var payment = PaymentRecord(accountID: account.id, description: "\(name) usage, \(monthName)", kind: .usageCharge, money: spent,
+                                                    paidAt: min(period.end.addingTimeInterval(-60), now), reference: reference)
+                        payment.estimated = true
+                        next.payments.append(payment); recorded.append(payment)
+                    }
+                }
+            }
+        } catch { notice = "Could not record last month's usage: \(error.localizedDescription)"; return [] }
+        return recorded
     }
 
     /// Chooses the currency for combined spending views, or nil for separate currencies.
@@ -238,6 +277,26 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    /// Refreshes live wallets whose last attempt is older than `interval`, one at a time.
+    /// Used by the background timer; manual Refresh keeps its one-minute cooldown.
+    public func refreshStaleAccounts(olderThan interval: TimeInterval = 3600, now: Date = .now) async {
+        guard state.autoRefresh != false, loadFailure == nil else { return }
+        let due = state.accounts.filter { $0.mode == .live && ($0.lastAttempt.map { now.timeIntervalSince($0) >= interval } ?? true) }.map(\.id)
+        for id in due where !refreshingAccounts.contains(id) { await refreshAccount(id, now: .now) }
+    }
+
+    public func setAutoRefresh(_ enabled: Bool) throws { try change { $0.autoRefresh = enabled } }
+
+    public func setMonthlyBudget(_ budget: Money?) throws {
+        if let budget { guard budget.amount > 0, Money.validCurrency(budget.currency) else { throw ValidationError.message("Enter a positive budget and a currency code.") } }
+        try change { $0.monthlyBudget = budget }
+    }
+
+    public func setLowBalanceAlert(_ id: UUID, below amount: Decimal?) throws {
+        if let amount { guard amount >= 0 else { throw ValidationError.message("Enter zero or more.") } }
+        try change { next in if let index = next.accounts.firstIndex(where: { $0.id == id }) { next.accounts[index].lowBalanceAlert = amount } }
+    }
+
     public func dismissSuggestion(_ id: String) throws {
         try change { next in next.dismissedSuggestions = Array(Set((next.dismissedSuggestions ?? []) + [id])).sorted() }
     }
@@ -256,6 +315,7 @@ public final class AppStore: ObservableObject {
         if let attempt = state.accounts[index].lastAttempt, now.timeIntervalSince(attempt) < 60 {
             notice = "Wait one minute between balance refreshes for this account."; return
         }
+        closePayAsYouGoPeriods(now: now)
         refreshingAccounts.insert(id)
         defer { refreshingAccounts.remove(id) }
         do {
