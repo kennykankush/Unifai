@@ -18,12 +18,12 @@ enum Palette {
         NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
     }
 
-    static let canvasNS = dynamic(rgb(0xF3F3F7), rgb(0x111216))
+    static let canvasNS = dynamic(rgb(0xF4F4F6), rgb(0x09090A))
     static let canvas = Color(nsColor: canvasNS)
-    static let sidebar = Color(nsColor: dynamic(rgb(0xFFFFFF), rgb(0x0B0C0F)))
-    static let surface = Color(nsColor: dynamic(rgb(0xFFFFFF), rgb(0x1A1B21)))
-    static let raised = Color(nsColor: dynamic(rgb(0xEDEDF3), rgb(0x25262E)))
-    static let border = Color(nsColor: dynamic(rgb(0x000000, 0.07), rgb(0xFFFFFF, 0.065)))
+    static let bar = Color(nsColor: dynamic(rgb(0xFFFFFF), rgb(0x050506)))
+    static let surface = Color(nsColor: dynamic(rgb(0xFFFFFF), rgb(0x141416)))
+    static let raised = Color(nsColor: dynamic(rgb(0xEDEDF1), rgb(0x1F1F23)))
+    static let border = Color(nsColor: dynamic(rgb(0x000000, 0.07), rgb(0xFFFFFF, 0.07)))
     static let accent = hex(0x7357FF)
     static let accentDeep = hex(0x5B3CF0)
     static let lime = hex(0xC8F542)
@@ -233,8 +233,38 @@ struct MeshBackdrop: View {
                 Circle().fill(Color.white).frame(width: w * 0.3, height: w * 0.3).position(x: w * 0.85, y: h * 0.25).blur(radius: 60).opacity(0.18)
             }
             .drawingGroup()
+            .overlay(Grain())
         }
     }
+}
+
+/// Film grain over gradients, the texture that keeps large colour fields from looking flat.
+struct Grain: View {
+    var opacity: Double = 0.16
+    var body: some View {
+        if let tile = GrainTile.image {
+            Image(nsImage: tile).resizable(resizingMode: .tile)
+                .blendMode(.overlay).opacity(opacity)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+}
+
+@MainActor enum GrainTile {
+    static let image: NSImage? = {
+        let size = 160
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: size * 4, bitsPerPixel: 32),
+              let data = rep.bitmapData else { return nil }
+        var generator = SystemRandomNumberGenerator()
+        for index in 0..<(size * size) {
+            let value = UInt8.random(in: 0...255, using: &generator)
+            data[index * 4] = value; data[index * 4 + 1] = value; data[index * 4 + 2] = value; data[index * 4 + 3] = 255
+        }
+        let image = NSImage(size: NSSize(width: size / 2, height: size / 2))
+        image.addRepresentation(rep)
+        return image
+    }()
 }
 
 extension View {
@@ -307,7 +337,7 @@ extension Palette {
 }
 
 struct PillButtonStyle: ButtonStyle {
-    enum Kind { case primary, secondary, glass, lime }
+    enum Kind { case primary, secondary, glass, lime, white }
     var kind: Kind = .secondary
     var compact = false
     func makeBody(configuration: Configuration) -> some View {
@@ -322,6 +352,8 @@ struct PillButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, compact ? 12 : 16)
                 .frame(height: compact ? 28 : 36)
                 .foregroundStyle(foreground)
@@ -339,6 +371,7 @@ struct PillButtonStyle: ButtonStyle {
             switch kind {
             case .primary, .glass: return .white
             case .lime: return Palette.hex(0x1A2104)
+            case .white: return Palette.hex(0x0B0B0C)
             case .secondary: return .primary
             }
         }
@@ -348,6 +381,7 @@ struct PillButtonStyle: ButtonStyle {
             case .lime: Gloss(shape: Capsule(), colors: Palette.limeGloss, highlight: 0.6, ring: 0.4)
             case .glass: Capsule().fill(Color.white.opacity(hovering ? 0.24 : 0.16)).overlay(Capsule().strokeBorder(Color.white.opacity(0.22)))
             case .secondary: Gloss(shape: Capsule(), colors: Palette.neutralGloss, highlight: 0.09, ring: 0.35).overlay(Capsule().strokeBorder(Palette.border))
+            case .white: Gloss(shape: Capsule(), colors: [Palette.hex(0xFFFFFF), Palette.hex(0xE9E9EC)], highlight: 0.9, ring: 0.5)
             }
         }
     }
@@ -792,16 +826,18 @@ struct AppIconArtwork: View {
 
 // MARK: - Window
 
-/// Makes the main window a single solid surface: transparent title bar over our own chrome,
-/// draggable from empty areas, opaque background.
+/// Makes the main window a single solid surface: transparent title bar over our own header,
+/// draggable from empty areas, opaque background, and traffic lights centred in the header.
 struct WindowConfigurator: NSViewRepresentable {
+    var headerHeight: CGFloat = 64
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async { configure(view.window) }
+        DispatchQueue.main.async { configure(view.window, coordinator: context.coordinator) }
         return view
     }
-    func updateNSView(_ view: NSView, context: Context) { DispatchQueue.main.async { configure(view.window) } }
-    private func configure(_ window: NSWindow?) {
+    func updateNSView(_ view: NSView, context: Context) { DispatchQueue.main.async { configure(view.window, coordinator: context.coordinator) } }
+    func makeCoordinator() -> TrafficLights { TrafficLights(headerHeight: headerHeight) }
+    private func configure(_ window: NSWindow?, coordinator: TrafficLights) {
         guard let window else { return }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -810,5 +846,42 @@ struct WindowConfigurator: NSViewRepresentable {
         window.isOpaque = true
         window.backgroundColor = Palette.canvasNS
         window.toolbar = nil
+        coordinator.attach(to: window)
+    }
+}
+
+/// Re-centres the close, minimise and zoom buttons in a taller custom header.
+/// AppKit lays them out again on resize and full-screen changes, so this re-applies after each.
+@MainActor final class TrafficLights: NSObject {
+    let headerHeight: CGFloat
+    private weak var window: NSWindow?
+    private var observers: [NSObjectProtocol] = []
+    init(headerHeight: CGFloat) { self.headerHeight = headerHeight }
+    func attach(to window: NSWindow) {
+        if self.window !== window {
+            self.window = window
+            observers.forEach(NotificationCenter.default.removeObserver)
+            let names: [Notification.Name] = [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+                                              NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification]
+            observers = names.map { name in
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.layout() }
+                }
+            }
+        }
+        layout()
+    }
+    func layout() {
+        guard let window, !window.styleMask.contains(.fullScreen),
+              let close = window.standardWindowButton(.closeButton),
+              let mini = window.standardWindowButton(.miniaturizeButton),
+              let zoom = window.standardWindowButton(.zoomButton),
+              let titlebar = close.superview else { return }
+        let buttonHeight = close.frame.height
+        let offset = (headerHeight - titlebar.frame.height) / 2
+        let y = (titlebar.frame.height - buttonHeight) / 2 - offset
+        for (index, button) in [close, mini, zoom].enumerated() {
+            button.setFrameOrigin(NSPoint(x: 20 + CGFloat(index) * 20, y: y))
+        }
     }
 }

@@ -44,10 +44,10 @@ struct UnifaiApp: App {
     var body: some Scene {
         Window("Unifai", id: "main") {
             MainView(fixtureMode: fixtureMode).environmentObject(store)
-                .frame(minWidth: 860, minHeight: 580)
+                .frame(minWidth: 1180, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1180, height: 780)
+        .defaultSize(width: 1400, height: 900)
         .commands { MainWindowCommands() }
     }
 }

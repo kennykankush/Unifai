@@ -35,7 +35,7 @@ open .build/Unifai.app
 
 The build uses no package dependencies and applies a local ad-hoc signature. It requires no Apple developer account. The app has not been notarized or prepared for distribution.
 
-The window opens on **Overview** with an empty state. Click **Add Wallet**, or open **Catalogue** in the sidebar, to add an account. The sidebar switches between Overview, Wallets, Payments, Subscriptions, Releases and Catalogue; press Command-F to search the current view and Command-N for the page's main action. Use the menu bar stack icon for the companion. **File > Show Companion** opens the same panel; **File > Show Unifai** returns to the main window. Closing the window keeps the companion running. Quit from the app menu or companion.
+The window opens on **Overview** with an empty state. Click **Add Wallet**, or open **Catalogue** in the top bar, to add an account. The top bar switches between Overview, Wallets, Payments, Subscriptions, Releases and Catalogue, and its lime button runs the current page's main action. A dot marks Wallets when a reading failed or went stale, and Subscriptions when a renewal is due within a week. Press Command-F to search the current page and Command-N for the main action. Use the menu bar stack icon for the companion. **File > Show Companion** opens the same panel; **File > Show Unifai** returns to the main window. Closing the window keeps the companion running. Quit from the app menu or companion.
 
 ## Connect accounts and record money
 
@@ -65,7 +65,7 @@ bash scripts/build-mcp.sh
 claude mcp add --scope user unifai -- "$PWD/.build/release/unifai-mcp"
 ```
 
-Once the server is built, the **Agent access** card in the app sidebar also offers **Copy setup command**, which copies the exact line for this checkout and data directory.
+Once the server is built, the white **Agent access** button in the app's top bar copies the exact setup line for this checkout and data directory.
 
 | Tool | Returns |
 | --- | --- |

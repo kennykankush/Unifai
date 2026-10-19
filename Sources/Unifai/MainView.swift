@@ -50,33 +50,34 @@ struct MainView: View {
     @State private var chartMode = "Cumulative"
     @State private var copiedSetup = false
     @FocusState private var searchFocused: Bool
+    @State private var searchActive = false
     @Namespace private var navNamespace
     struct Removal: Identifiable { let id = UUID(); let title: String; let action: () throws -> Void }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Rectangle().fill(Palette.border).frame(width: 1)
+        VStack(spacing: 0) {
+            topBar
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let error = store.loadFailure { InlineNotice(text: error).padding(.bottom, 18) }
                     page
+                    footer
                 }
-                .padding(.horizontal, 34).padding(.top, 34).padding(.bottom, 44)
+                .padding(.horizontal, 40).padding(.top, 30).padding(.bottom, 28)
                 .frame(maxWidth: 1240, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            .defaultScrollAnchor(.top)
             .id(destination)
             .transition(.identity)
             .background(Palette.canvas)
         }
         .background(Palette.canvas)
-        .background(WindowConfigurator())
+        .background(WindowConfigurator(headerHeight: 64))
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: destination) { _, _ in search = "" }
         .onAppear {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-            DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
         }
         .sheet(item: $editor) { item in
             switch item {
@@ -107,98 +108,73 @@ struct MainView: View {
         }
     }
 
-    // MARK: Sidebar
+    // MARK: Top bar
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                AppMark(size: 30)
-                Text("Unifai").font(.system(size: 17, weight: .bold)).tracking(-0.3)
-                Spacer()
-                if fixtureMode { Chip(text: "Demo", tint: Palette.warning, symbol: "testtube.2") }
-            }
-            .padding(.top, 50).padding(.horizontal, 18)
-
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                TextField(searchPrompt, text: $search).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
-                if search.isEmpty {
-                    Text("⌘F").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
-                } else {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
-                        .buttonStyle(.plain).accessibilityLabel("Clear search")
-                }
-            }
-            .padding(.horizontal, 12).frame(height: 36)
-            .background(Capsule().fill(Palette.raised))
-            .overlay(Capsule().strokeBorder(searchFocused ? Palette.accent.opacity(0.7) : .clear, lineWidth: 1.5))
-            .background { Button("") { searchFocused = true }.keyboardShortcut("f").hidden() }
-            .padding(.horizontal, 14).padding(.top, 20)
-
-            Text("MENU").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(.tertiary)
-                .padding(.horizontal, 22).padding(.top, 24).padding(.bottom, 8)
-            VStack(spacing: 4) {
-                ForEach(Destination.allCases) { navItem($0) }
-            }
-            .padding(.horizontal, 12)
-
-            Spacer(minLength: 16)
-            agentCard.padding(.horizontal, 14)
-            HStack(spacing: 6) {
-                Image(systemName: fixtureMode ? "testtube.2" : "lock.fill")
-                Text(fixtureMode ? "Synthetic data. Network disabled." : "Stored on this Mac. Keys in Keychain.")
-            }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(fixtureMode ? AnyShapeStyle(Palette.warning) : AnyShapeStyle(.tertiary))
-            .padding(.horizontal, 20).padding(.vertical, 16)
+    private var topBar: some View {
+        ViewThatFits(in: .horizontal) {
+            topBarContent(compact: false)
+            topBarContent(compact: true)
         }
-        .frame(width: 244)
-        .background(Palette.sidebar)
+        .padding(.leading, 92).padding(.trailing, 20)
+        .frame(height: 64)
+        .background(Palette.bar)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.opacity(0.7)).frame(height: 1) }
     }
 
-    private func navItem(_ item: Destination) -> some View {
+    private func topBarContent(compact: Bool) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 10) {
+                AppMark(size: 30)
+                Text("Unifai.").font(.system(size: 19, weight: .semibold)).tracking(-0.6)
+                if fixtureMode { Chip(text: "Demo", tint: Palette.warning, symbol: "testtube.2") }
+            }
+            .fixedSize()
+            Spacer(minLength: compact ? 12 : 24)
+            HStack(spacing: compact ? 0 : 4) {
+                ForEach(Destination.allCases) { navItem($0, compact: compact) }
+            }
+            .fixedSize()
+            Spacer(minLength: compact ? 12 : 24)
+            HStack(spacing: 10) {
+                agentButton(compact: compact)
+                primaryAction
+            }
+            .fixedSize()
+        }
+    }
+
+    private func navItem(_ item: Destination, compact: Bool) -> some View {
         let selected = destination == item
-        let badge = navBadge(item)
-        return Button { withAnimation(.snappy(duration: 0.25)) { destination = item } } label: {
-            HStack(spacing: 11) {
-                Image(systemName: item.symbol).font(.system(size: 13, weight: .semibold)).frame(width: 18)
-                    .foregroundStyle(selected ? Palette.accentInk : Color.secondary)
-                Text(item.title).font(.system(size: 13, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Color.primary : Color.secondary)
-                Spacer()
-                if let badge {
-                    Text(badge.0).font(.system(size: 10, weight: .bold)).monospacedDigit()
-                        .foregroundStyle(badge.1)
-                        .padding(.horizontal, 6).frame(minWidth: 20, minHeight: 18)
-                        .background(Capsule().fill(badge.1.opacity(0.14)))
-                        .overlay(Capsule().strokeBorder(badge.1.opacity(0.22)))
+        let signal = navSignal(item)
+        return Button { withAnimation(.snappy(duration: 0.28)) { destination = item } } label: {
+            HStack(spacing: 6) {
+                Text(item.title)
+                    .font(.system(size: 14, weight: selected ? .medium : .regular))
+                    .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.72))
+                if let signal {
+                    Circle().fill(signal).frame(width: 6, height: 6)
                 }
             }
-            .padding(.horizontal, 12).frame(height: 38)
+            .padding(.horizontal, compact ? 12 : 18).frame(height: 40)
             .background {
                 if selected {
-                    Gloss(shape: RoundedRectangle(cornerRadius: 10, style: .continuous),
-                          colors: [Palette.accent.opacity(0.2), Palette.accent.opacity(0.07)], highlight: 0.13, ring: 0.35)
+                    Capsule().fill(Color.primary.opacity(0.1))
+                        .overlay(Capsule().strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.1), .clear], startPoint: .top, endPoint: .bottom)))
                         .matchedGeometryEffect(id: "nav", in: navNamespace)
                 }
             }
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(item.title)
+        .accessibilityLabel(item.title + (signal == nil ? "" : ", needs attention"))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func navBadge(_ item: Destination) -> (String, Color)? {
+    /// A small dot only where something needs action: failed or stale wallets, renewals within a week.
+    private func navSignal(_ item: Destination) -> Color? {
         switch item {
-        case .accounts:
-            let attention = store.state.accounts.filter(needsAttention).count
-            return attention > 0 ? ("\(attention)", Palette.warning) : nil
-        case .subscriptions:
-            let due = store.state.subscriptions.filter { daysUntil($0.nextRenewal) <= 7 }.count
-            return due > 0 ? ("\(due)", Palette.lime) : nil
-        case .payments:
-            return store.state.payments.isEmpty ? nil : ("\(store.state.payments.count)", Palette.lime)
+        case .accounts: return store.state.accounts.contains(where: needsAttention) ? Palette.warning : nil
+        case .subscriptions: return store.state.subscriptions.contains { daysUntil($0.nextRenewal) <= 7 } ? Palette.lime : nil
         default: return nil
         }
     }
@@ -212,39 +188,66 @@ struct MainView: View {
         return "claude mcp add --scope user unifai -- \"\(binary.path)\"\(extra)"
     }
 
-    private var agentCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.lime)
-                Text("Agent access").font(.system(size: 13, weight: .bold))
+    private func agentButton(compact: Bool) -> some View {
+        Button {
+            guard let command = mcpCommand else {
+                store.notice = "Build the MCP server first with scripts/build-mcp.sh, then copy the setup command from here."
+                return
             }
-            Text("Let your coding agents read balances and spend over MCP. Read-only.")
-                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let command = mcpCommand {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                    withAnimation { copiedSetup = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { withAnimation { copiedSetup = false } }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: copiedSetup ? "checkmark" : "doc.on.doc")
-                        Text(copiedSetup ? "Copied" : "Copy setup command")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(PillButtonStyle(kind: .lime, compact: true))
-                .help(command)
-            } else {
-                Text("Build it with scripts/build-mcp.sh").font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            withAnimation { copiedSetup = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { withAnimation { copiedSetup = false } }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: copiedSetup ? "checkmark" : "sparkles").font(.system(size: 12, weight: .bold))
+                if !compact { Text(copiedSetup ? "Command copied" : "Agent access") }
             }
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(LinearGradient(colors: [Palette.accent.opacity(0.22), Palette.raised.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomTrailing))
-        )
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.border))
+        .buttonStyle(PillButtonStyle(kind: .white))
+        .accessibilityLabel(copiedSetup ? "Command copied" : "Agent access")
+        .help(mcpCommand.map { "Copy the MCP setup command so coding agents can read balances and spend (read-only):\n\($0)" } ?? "Build the MCP server with scripts/build-mcp.sh")
+    }
+
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Image(systemName: fixtureMode ? "testtube.2" : "lock.fill")
+            Text(fixtureMode ? "Synthetic workspace. Network requests are disabled and no real account data is shown." : "Stored on this Mac. Credentials stay in Keychain.")
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(fixtureMode ? AnyShapeStyle(Palette.warning.opacity(0.9)) : AnyShapeStyle(.tertiary))
+        .frame(maxWidth: .infinity)
+        .padding(.top, 40)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            // Kept out of the key-view loop until requested, so macOS cannot auto-focus it on window activation.
+            TextField(searchPrompt, text: $search).textFieldStyle(.plain).font(.system(size: 13)).focused($searchFocused)
+                .disabled(!searchActive && search.isEmpty)
+            if search.isEmpty {
+                Text("⌘F").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+            } else {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14).frame(width: 240, height: 38)
+        .background(Capsule().fill(Palette.surface))
+        .overlay(Capsule().strokeBorder(searchFocused ? Palette.accent.opacity(0.7) : Palette.border, lineWidth: searchFocused ? 1.5 : 1))
+        .overlay {
+            if !searchActive && search.isEmpty {
+                Color.clear.contentShape(Capsule()).onTapGesture(perform: activateSearch)
+            }
+        }
+        .background { Button("", action: activateSearch).keyboardShortcut("f").hidden() }
+        .onChange(of: searchFocused) { _, focused in if !focused && search.isEmpty { searchActive = false } }
+    }
+
+    private func activateSearch() {
+        searchActive = true
+        DispatchQueue.main.async { searchFocused = true }
     }
 
     // MARK: Helpers
@@ -298,7 +301,7 @@ struct MainView: View {
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 16)
-            primaryAction
+            searchField
         }
         .padding(.bottom, 26)
     }
@@ -307,16 +310,16 @@ struct MainView: View {
         switch destination {
         case .today, .accounts:
             Button { destination = .catalogue } label: { Label("Add Wallet", systemImage: "plus") }
-                .buttonStyle(PillButtonStyle(kind: .primary)).keyboardShortcut("n")
+                .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
         case .payments:
             Button { editor = .payment(nil) } label: { Label("Add Payment", systemImage: "plus") }
-                .buttonStyle(PillButtonStyle(kind: .primary)).keyboardShortcut("n")
+                .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
         case .subscriptions:
             Button { editor = .subscription(nil) } label: { Label("Add Subscription", systemImage: "plus") }
-                .buttonStyle(PillButtonStyle(kind: .primary)).keyboardShortcut("n")
+                .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
         case .releases:
             Button { editor = .repository } label: { Label("Follow Repository", systemImage: "plus") }
-                .buttonStyle(PillButtonStyle(kind: .primary)).keyboardShortcut("n")
+                .buttonStyle(PillButtonStyle(kind: .lime)).keyboardShortcut("n")
         case .catalogue:
             EmptyView()
         }
