@@ -191,7 +191,8 @@ extension Money {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 4
+        // Cents for display; more precision only for sub-cent amounts that would otherwise read as zero.
+        formatter.maximumFractionDigits = amount != 0 && abs(amount) < Decimal(string: "0.01")! ? 4 : 2
         return formatter.string(from: amount as NSDecimalNumber) ?? amount.description
     }
     var plainText: String { "\(amountText) \(currency)" }
@@ -564,11 +565,12 @@ struct WalletCard: View {
                     status
                 }
                 Spacer(minLength: 8)
-                Text(name).font(.system(size: 15, weight: .bold)).lineLimit(1)
+                Text(name).font(.system(size: 15, weight: .bold)).lineLimit(1).truncationMode(.tail)
                 Text([account.label, account.snapshot?.plan ?? (account.billingScope.isEmpty ? nil : account.billingScope)].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(1)
                     .padding(.bottom, 10)
-                amount
+                // Fixed slot: a taller amount block (meters, two windows) must not push the name up.
+                amount.frame(height: 50, alignment: .bottomLeading)
             }
             .padding(18)
         }

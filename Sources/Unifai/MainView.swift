@@ -51,6 +51,7 @@ struct MainView: View {
     @State private var chartMode = "Cumulative"
     @State private var copiedSetup = false
     @State private var signingIn: Set<UUID> = []
+    @State private var infoAccount: UUID?
     @FocusState private var searchFocused: Bool
     @State private var searchActive = false
     @Namespace private var navNamespace
@@ -775,6 +776,26 @@ struct MainView: View {
         }
     }
 
+    private struct TileRow { let label: String; let value: String; var tint: Color = .primary }
+
+    /// One-line facts for a wallet tile, in a fixed order: usage windows, plan, balance details, spend.
+    private func tileRows(_ account: ConnectedAccount) -> [TileRow] {
+        guard let snapshot = account.snapshot else {
+            return [TileRow(label: "Status", value: account.mode == .manual ? "Manual records only" : "Refresh to read", tint: .secondary)]
+        }
+        var rows: [TileRow] = []
+        for window in snapshot.allowances ?? [] {
+            let reset = window.resetsAt.map { " · resets \($0.formatted(.relative(presentation: .named)))" } ?? ""
+            rows.append(TileRow(label: window.name, value: "\(window.usedPercent)% used\(reset)",
+                                tint: window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : .primary))
+        }
+        if let plan = snapshot.plan { rows.append(TileRow(label: "Plan", value: plan)) }
+        rows += snapshot.details.map { TileRow(label: $0.label, value: $0.value.plainText) }
+        let period = snapshot.consumptionPeriod.map { " (\($0.lowercased()))" } ?? ""
+        rows += snapshot.reportedConsumption.map { TileRow(label: "Reported consumption\(period)", value: $0.plainText) }
+        return rows
+    }
+
     private func walletTile(_ account: ConnectedAccount) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             WalletCard(account: account, paid: paidTotals(for: account), height: 190)
@@ -808,55 +829,34 @@ struct MainView: View {
                     Spacer()
                     moreMenu("Options for \(account.label)") { walletMenuItems(account) }
                 }
-                if let windows = account.snapshot?.allowances, !windows.isEmpty {
-                    VStack(spacing: 10) {
-                        ForEach(windows) { window in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Text(window.name).font(.system(size: 12, weight: .semibold))
-                                    Spacer()
-                                    Text("\(window.usedPercent)% used").font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                                        .foregroundStyle(window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : Color.primary)
-                                }
-                                UsageMeter(used: Double(window.usedPercent) / 100,
-                                           tint: window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : Palette.series(account.integrationID),
-                                           track: Palette.raised)
-                                if let reset = window.resetsAt {
-                                    Text("Resets \(reset.formatted(.relative(presentation: .named))) · \(reset.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                                }
-                            }
+                // Every tile uses the same anatomy: up to three one-line rows in a fixed slot, then the
+                // footer. Long explanations live behind the info button, so text never stretches a tile.
+                VStack(spacing: 9) {
+                    ForEach(Array(tileRows(account).enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 8) {
+                            Text(row.label).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(row.value).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(row.tint).lineLimit(1)
                         }
+                        .font(.system(size: 12))
+                        .accessibilityElement(children: .combine)
                     }
                 }
-                if let snapshot = account.snapshot {
-                    let period = snapshot.consumptionPeriod.map { " (\($0.lowercased()))" } ?? ""
-                    let detailRows = snapshot.details.map { ($0.label, $0.value) } + snapshot.reportedConsumption.map { ("Reported consumption\(period)", $0) }
-                    if let plan = snapshot.plan {
-                        HStack { Text("Plan").foregroundStyle(.secondary); Spacer(); Text(plan).font(.system(size: 12, weight: .semibold)) }.font(.system(size: 12))
-                    }
-                    VStack(spacing: 8) {
-                        ForEach(Array(detailRows.enumerated()), id: \.offset) { _, row in
-                            HStack {
-                                Text(row.0).foregroundStyle(.secondary)
-                                Spacer()
-                                Text(row.1.plainText).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                .frame(minHeight: 63, alignment: .top)
+                HStack(spacing: 10) {
+                    Text(account.snapshot.map { "Updated \($0.observedAt.formatted(date: .abbreviated, time: .shortened))" } ?? (account.mode == .manual ? "Manual records" : "Not refreshed yet"))
+                        .lineLimit(1)
+                    Spacer()
+                    if let snapshot = account.snapshot {
+                        Button { infoAccount = account.id } label: { Image(systemName: "info.circle") }
+                            .buttonStyle(.plain).help(snapshot.coverage).accessibilityLabel("About this reading")
+                            .popover(isPresented: Binding(get: { infoAccount == account.id }, set: { if !$0 { infoAccount = nil } }), arrowEdge: .bottom) {
+                                Text(snapshot.coverage).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true).padding(14).frame(width: 300)
                             }
-                            .font(.system(size: 12))
-                            .accessibilityElement(children: .ignore).accessibilityLabel("\(row.0), \(row.1.formatted)")
-                        }
-                    }
-                    Text(snapshot.coverage).font(.system(size: 11)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Text("Updated \(snapshot.observedAt.formatted(date: .abbreviated, time: .shortened))")
-                        Spacer()
                         Link(destination: snapshot.source) { Label("Source", systemImage: "arrow.up.right") }
                     }
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                } else {
-                    Text(account.mode == .manual ? "Manual records only. Balance and allowance are unavailable." : "No balance reading yet. Refresh to check this account.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                 if let error = account.lastError {
                     InlineNotice(text: error + (account.lastAttempt.map { " Last attempt \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""))
                 }
