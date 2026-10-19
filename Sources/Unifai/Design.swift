@@ -686,10 +686,18 @@ enum SpendSeries {
     static func cumulative(_ payments: [PaymentRecord], currency: String, start: Date?) -> [Point] {
         let records = payments.filter { $0.money.currency == currency && $0.paidAt <= .now }.sorted { $0.paidAt < $1.paidAt }
         guard let first = records.first else { return [] }
+        // One point per day: several payments at the same moment would otherwise share an x value,
+        // and Swift Charts stacks area marks that share one.
+        let calendar = Calendar.current
         var total = 0.0
-        var points = [Point(date: min(start ?? first.paidAt, first.paidAt).addingTimeInterval(-86400), total: 0)]
-        for record in records { total += signed(record); points.append(Point(date: record.paidAt, total: total)) }
-        points.append(Point(date: .now, total: total))
+        var points = [Point(date: calendar.startOfDay(for: min(start ?? first.paidAt, first.paidAt)).addingTimeInterval(-86400), total: 0)]
+        for record in records {
+            total += signed(record)
+            let day = calendar.startOfDay(for: record.paidAt)
+            if let last = points.last, last.date == day { points[points.count - 1] = Point(date: day, total: total) }
+            else { points.append(Point(date: day, total: total)) }
+        }
+        if let last = points.last, last.date < calendar.startOfDay(for: .now) { points.append(Point(date: calendar.startOfDay(for: .now), total: total)) }
         return points
     }
 
@@ -752,9 +760,12 @@ struct SpendAreaChart: View {
     let currency: String
     var body: some View {
         Chart(points) { point in
-            AreaMark(x: .value("Date", point.date), y: .value(currency, point.total))
+            AreaMark(x: .value("Date", point.date), y: .value(currency, point.total), stacking: .unstacked)
                 .interpolationMethod(.monotone)
-                .foregroundStyle(LinearGradient(colors: [Palette.accent.opacity(0.55), Palette.hex(0xFF6A88).opacity(0.15), .clear], startPoint: .top, endPoint: .bottom))
+                .foregroundStyle(LinearGradient(stops: [.init(color: Palette.hex(0x8A3BFF).opacity(0.75), location: 0),
+                                                        .init(color: Palette.hex(0xFF6A88).opacity(0.35), location: 0.55),
+                                                        .init(color: Palette.hex(0xFF6A88).opacity(0), location: 1)],
+                                                startPoint: .top, endPoint: .bottom))
             LineMark(x: .value("Date", point.date), y: .value(currency, point.total))
                 .interpolationMethod(.monotone)
                 .foregroundStyle(LinearGradient(colors: [Palette.accent, Palette.hex(0xFF6A88)], startPoint: .leading, endPoint: .trailing))

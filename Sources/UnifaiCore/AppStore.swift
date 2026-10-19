@@ -16,8 +16,10 @@ public final class AppStore: ObservableObject {
     public typealias StatusLoader = (StatusFeed) async throws -> Data
     public typealias PostLoader = (_ token: String, _ handle: String, _ userID: String?, _ sinceID: String?) async throws -> XClient.Result
     private let rateLoader: RateLoader
+    public typealias FeedLoader = (URL) async throws -> Data
     let statusLoader: StatusLoader
     let postLoader: PostLoader
+    let feedLoader: FeedLoader
     @Published public internal(set) var refreshingTimeline = false
     @Published public internal(set) var hasXToken = false
     @Published public internal(set) var timelineErrors: [String: String] = [:]
@@ -31,9 +33,10 @@ public final class AppStore: ObservableObject {
                 releases: @escaping ReleaseLoader = { try await GitHubClient().fetch($0, now: $1) },
                 rates rateLoader: @escaping RateLoader = { try await ExchangeRates.fetch(currencies: $0, since: $1, now: $2) },
                 status: @escaping StatusLoader = { try await StatusFeedClient().fetch($0) },
-                posts: @escaping PostLoader = { try await XClient().fetch(token: $0, handle: $1, userID: $2, sinceID: $3) }) {
+                posts: @escaping PostLoader = { try await XClient().fetch(token: $0, handle: $1, userID: $2, sinceID: $3) },
+                feeds: @escaping FeedLoader = { try await FeedClient().fetch($0) }) {
         self.repository = repository; self.vault = vault; self.balances = balances; self.releases = releases; self.rateLoader = rateLoader
-        self.statusLoader = status; self.postLoader = posts
+        self.statusLoader = status; self.postLoader = posts; self.feedLoader = feeds
         self.hasXToken = ((try? vault.read(accountID: Self.xTokenID)) ?? nil) != nil
         self.rates = RateStore(directory: repository.directory).load()
         do { state = try repository.load() }

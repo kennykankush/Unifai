@@ -37,6 +37,8 @@ public struct BalanceClient {
         switch integrationID {
         case "openrouter": endpoint = "https://openrouter.ai/api/v1/credits"
         case "deepseek": endpoint = "https://api.deepseek.com/user/balance"
+        case "kimi": endpoint = "https://api.moonshot.ai/v1/users/me/balance"
+        case "elevenlabs": endpoint = "https://api.elevenlabs.io/v1/user/subscription"
         case "openai-api":
             // Costs for the last 30 full and partial UTC days, one bucket per day.
             var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -51,7 +53,9 @@ public struct BalanceClient {
         let url = URL(string: endpoint)!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        if integrationID == "claude-api" {
+        if integrationID == "elevenlabs" {
+            request.setValue(credential, forHTTPHeaderField: "xi-api-key")
+        } else if integrationID == "claude-api" {
             request.setValue(credential, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             request.setValue("Unifai/1 (https://github.com/kennykankush/Unifai)", forHTTPHeaderField: "User-Agent")
@@ -75,6 +79,30 @@ public struct BalanceClient {
     }
     public static func decode(integrationID: String, data: Data, source: URL, now: Date = .now) throws -> BalanceSnapshot {
         do {
+            if integrationID == "kimi" {
+                // Kimi Open Platform (platform.kimi.ai): balances in US dollars as numbers.
+                struct Body: Decodable { struct Balance: Decodable { let available_balance: Decimal; let voucher_balance: Decimal?; let cash_balance: Decimal? }; let data: Balance }
+                let body = try JSONDecoder().decode(Body.self, from: data).data
+                guard body.available_balance >= 0 else { throw ConnectorError.invalidResponse }
+                var details: [BalanceDetail] = []
+                if let cash = body.cash_balance { details.append(BalanceDetail("Cash balance", Money(cash.rounded2, "USD"))) }
+                if let voucher = body.voucher_balance, voucher > 0 { details.append(BalanceDetail("Voucher balance", Money(voucher.rounded2, "USD"))) }
+                return BalanceSnapshot(balances: [Money(body.available_balance.rounded2, "USD")], details: details, observedAt: now, source: source,
+                                       coverage: "Kimi Open Platform balance (platform.kimi.ai keys). Available balance includes vouchers; cash balance can go negative when the account owes money. Keys from the China platform (platform.moonshot.cn) are not accepted.")
+            }
+            if integrationID == "elevenlabs" {
+                struct Body: Decodable { let tier: String?; let character_count: Int; let character_limit: Int; let next_character_count_reset_unix: Int?; let status: String? }
+                let body = try JSONDecoder().decode(Body.self, from: data)
+                guard body.character_limit >= 0, body.character_count >= 0 else { throw ConnectorError.invalidResponse }
+                let used = body.character_limit > 0 ? min(100, Int((Double(body.character_count) / Double(body.character_limit) * 100).rounded())) : 0
+                let reset = body.next_character_count_reset_unix.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                let format = IntegerFormatStyle<Int>.number
+                return BalanceSnapshot(balances: [], observedAt: now, source: source,
+                                       coverage: "ElevenLabs subscription usage: \(body.character_count.formatted(format)) of \(body.character_limit.formatted(format)) characters this billing period. Payments are not included; record or import invoices.",
+                                       plan: body.tier.map { "ElevenLabs " + $0.replacingOccurrences(of: "_", with: " ").capitalized },
+                                       allowances: [AllowanceWindow(name: "Characters", usedPercent: used, windowMinutes: nil, resetsAt: reset)],
+                                       limitReached: body.character_limit > 0 && body.character_count >= body.character_limit)
+            }
             if integrationID == "claude-api" {
                 let body = try JSONDecoder().decode(AnthropicCostReport.self, from: data)
                 var totals: [String: Decimal] = [:], latest: [String: Decimal] = [:]

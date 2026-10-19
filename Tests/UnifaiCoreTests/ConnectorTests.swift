@@ -79,6 +79,32 @@ final class ConnectorTests: XCTestCase {
         }
         _ = try await BalanceClient(session: session).fetch(integrationID: "deepseek", credential: "fixture-key")
     }
+    func testKimiAndElevenLabsReadOneEndpointEach() async throws {
+        let session = StubProtocol.session(); defer { session.invalidateAndCancel() }
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.absoluteString, "https://api.moonshot.ai/v1/users/me/balance")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-key")
+            return (200, [:], Data(#"{"code":0,"data":{"available_balance":49.58894,"voucher_balance":46.58893,"cash_balance":3.00001},"scode":"0x0","status":true}"#.utf8))
+        }
+        let kimi = try await BalanceClient(session: session).fetch(integrationID: "kimi", credential: "fixture-key")
+        XCTAssertEqual(kimi.balances, [Money(Decimal(string: "49.59")!, "USD")])
+        XCTAssertEqual(kimi.details.map(\.label), ["Cash balance", "Voucher balance"])
+
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://api.elevenlabs.io/v1/user/subscription")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "xi-api-key"), "fixture-key")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return (200, [:], Data(#"{"tier":"creator","character_count":75000,"character_limit":100000,"next_character_count_reset_unix":1793500000,"status":"active"}"#.utf8))
+        }
+        let voice = try await BalanceClient(session: session).fetch(integrationID: "elevenlabs", credential: "fixture-key")
+        XCTAssertEqual(voice.plan, "ElevenLabs Creator")
+        XCTAssertEqual(voice.allowances?.first?.usedPercent, 75)
+        XCTAssertEqual(voice.allowances?.first?.resetsAt, Date(timeIntervalSince1970: 1793500000))
+        XCTAssertEqual(voice.limitReached, false)
+        XCTAssertEqual(Catalogue.integration("elevenlabs")?.billing, .allowance)
+        XCTAssertEqual(Catalogue.integration("kimi")?.status, .ready)
+    }
     func testHTTPFailuresAreTypedAndNeverIncludeBody() async throws {
         let session = StubProtocol.session(); defer { session.invalidateAndCancel() }
         for (status, expected) in [(401, ConnectorError.authorization), (403, .authorization), (429, .rateLimited), (500, .unavailable(500)), (302, .unavailable(302))] {

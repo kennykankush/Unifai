@@ -37,7 +37,7 @@ struct UnifaiApp: App {
             let vault = MemoryVault()
             model = AppStore(repository: repository, vault: vault,
                              balances: FixtureWorkspace.balance, releases: FixtureWorkspace.releases, rates: FixtureWorkspace.rates,
-                             status: FixtureWorkspace.status, posts: FixtureWorkspace.posts)
+                             status: FixtureWorkspace.status, posts: FixtureWorkspace.posts, feeds: FixtureWorkspace.feeds)
             if !args.contains("--fixture-empty"), Bundle.main.object(forInfoDictionaryKey: "UnifaiFixtureEmpty") as? Bool != true, model.loadFailure == nil {
                 do { try FixtureWorkspace.prepare(model, vault: vault) }
                 catch { model.notice = "Fixture setup failed: \(error.localizedDescription)" }

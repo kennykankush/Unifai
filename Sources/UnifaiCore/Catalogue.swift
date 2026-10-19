@@ -34,9 +34,9 @@ public struct Integration: Identifiable {
     public var billing: BillingModel {
         switch id {
         case "openrouter", "deepseek", "claude-api", "openai-api", "kimi", "minimax", "zai", "dashscope": return .prepaid
-        case "codex", "claude-subscription": return .allowance
+        case "codex", "claude-subscription", "elevenlabs": return .allowance
         case "azure-subscription", "azure", "bedrock", "vertex", "aws", "gcp", "digitalocean", "hetzner", "railway", "fly", "render", "other-cloud",
-             "groq", "mistral", "together", "fireworks", "replicate", "huggingface", "fal", "xai", "perplexity-api", "elevenlabs", "stability", "gemini-api":
+             "groq", "mistral", "together", "fireworks", "replicate", "huggingface", "fal", "xai", "perplexity-api", "stability", "gemini-api":
             return .payAsYouGo
         default: return .subscription
         }
@@ -97,10 +97,18 @@ public enum Catalogue {
             ("perplexity-api", "Perplexity API"), ("xai", "xAI / Grok API"), ("groq", "Groq"),
             ("mistral", "Mistral"), ("together", "Together AI"), ("fireworks", "Fireworks AI"),
             ("replicate", "Replicate"), ("huggingface", "Hugging Face"), ("fal", "fal"),
-            ("elevenlabs", "ElevenLabs"), ("stability", "Stability AI"), ("dashscope", "Alibaba / DashScope"),
-            ("kimi", "Moonshot / Kimi"), ("minimax", "MiniMax"), ("zai", "Z.ai"),
+            ("stability", "Stability AI"), ("dashscope", "Alibaba / DashScope"),
+            ("minimax", "MiniMax"), ("zai", "Z.ai"),
             ("azure", "Azure AI / Foundry (manual)"), ("bedrock", "AWS Bedrock"), ("vertex", "Google Vertex AI")
         ]
+        items.append(.init(id: "kimi", name: "Kimi API (Moonshot)", category: .providers, status: .ready, evidence: .documented,
+                           method: "API key · one read-only balance request", capabilities: "Available, cash and voucher balance in US dollars",
+                           limitation: "Uses platform.kimi.ai keys; China platform keys are not accepted. No payment history, so record top-ups from receipts.",
+                           source: URL(string: "https://platform.kimi.ai/docs/api/balance")))
+        items.append(.init(id: "elevenlabs", name: "ElevenLabs", category: .providers, status: .ready, evidence: .documented,
+                           method: "API key · one read-only subscription request", capabilities: "Plan, characters used against the allowance, and when it resets",
+                           limitation: "Shows usage, not money; record the subscription as a schedule so renewals count toward spend.",
+                           source: URL(string: "https://elevenlabs.io/docs/api-reference/user/subscription/get")))
         let tools = [
             ("copilot", "GitHub Copilot"), ("gemini-consumer", "Gemini subscription"), ("gemini-cli", "Gemini CLI"),
             ("windsurf", "Windsurf"), ("opencode", "OpenCode"), ("cline", "Cline"), ("roo", "Roo Code"),
@@ -125,7 +133,16 @@ public enum Catalogue {
                                capabilities: "Record invoices, top-ups and recurring plans; import from CSV",
                                limitation: "No live connector yet. Record invoices or import them, and add a schedule for fixed monthly plans.", source: nil))
         }
-        let sources = [("rss", "Blogs & changelogs"), ("status", "Provider status pages"), ("papers", "Papers & model releases"), ("newsletters", "Newsletters, video & podcasts")]
+        items.append(.init(id: "status", name: "Provider status pages", category: .discovery, status: .ready, evidence: .documented,
+                           method: "Public RSS feeds · no account", capabilities: "Incidents for OpenAI, Anthropic, Azure and DeepSeek in the Timeline, with each provider's current state",
+                           limitation: "Automatic for the providers you have wallets with. OpenAI incidents are kept only when they mention products you use.", source: nil))
+        items.append(.init(id: "ai-news", name: "AI news & blogs", category: .discovery, status: .ready, evidence: .documented,
+                           method: "Public RSS and Atom feeds · no account", capabilities: "OpenAI News, Google DeepMind, Google AI, Hugging Face and Simon Willison's weblog in the Timeline",
+                           limitation: "Anthropic publishes no news feed. Turn feeds off in Settings.", source: nil))
+        items.append(.init(id: "new-models", name: "New models", category: .discovery, status: .ready, evidence: .documented,
+                           method: "OpenRouter's public model list · no key", capabilities: "Models added in the last two weeks, with context length and price per million tokens",
+                           limitation: "Covers models listed on OpenRouter; checked every six hours.", source: URL(string: "https://openrouter.ai/docs/api-reference/list-available-models")))
+        let sources = [("papers", "Papers"), ("newsletters", "Newsletters, video & podcasts")]
         for (id, name) in sources {
             items.append(.init(id: id, name: name, category: .discovery, status: .planned, evidence: .unverified,
                                method: "Public feed or supported API, per source", capabilities: "Planned: source-linked updates",

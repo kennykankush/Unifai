@@ -11,6 +11,8 @@ public enum TimelineKind: String, Codable, CaseIterable {
     case release = "Release"
     case status = "Status"
     case post = "Post"
+    case news = "News"
+    case model = "New model"
 
     public var isAccountEvent: Bool { [.earlyReset, .reset, .limitReached, .resetCredit, .anomaly, .recorded].contains(self) }
 }

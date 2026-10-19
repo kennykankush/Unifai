@@ -45,6 +45,9 @@ public extension AppStore {
         }
     }
 
+    func setNewsFeeds(_ on: Bool) throws { try change { $0.newsFeeds = on } }
+    func setNewModels(_ on: Bool) throws { try change { $0.newModels = on } }
+
     // MARK: X
 
     func setXToken(_ token: String?) throws {
@@ -96,6 +99,19 @@ public extension AppStore {
         for feed in StatusFeed.relevant(to: state.accounts) {
             do { incoming += StatusFeedClient.events(try await statusLoader(feed), feed: feed, now: now, integrations: Set(state.accounts.map(\.integrationID))) }
             catch { errors[feed.name] = "\(feed.name) status could not be read." }
+        }
+        if state.newsFeeds != false {
+            for feed in NewsFeed.all {
+                do { incoming += NewsFeed.events(try await feedLoader(feed.url), feed: feed, now: now) }
+                catch { errors[feed.name] = "\(feed.name) could not be read." }
+            }
+        }
+        // The model list is large and changes slowly: every six hours.
+        if state.newModels != false, force || (state.modelsCheckedAt.map { now.timeIntervalSince($0) >= 6 * 3600 } ?? true) {
+            do {
+                incoming += NewModels.events(try await feedLoader(NewModels.url), accounts: state.accounts, now: now)
+                try? change { $0.modelsCheckedAt = now }
+            } catch { errors["OpenRouter models"] = "OpenRouter's model list could not be read." }
         }
         if let token = (try? vault.read(accountID: Self.xTokenID)) ?? nil {
             let key = Self.monthKey(now)

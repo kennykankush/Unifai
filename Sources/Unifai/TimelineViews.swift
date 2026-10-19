@@ -14,6 +14,26 @@ enum EventStyle {
         case .release: return nil
         case .status: return event.important ? ("exclamationmark", Palette.warning) : ("checkmark", Palette.positive)
         case .post: return event.important ? ("arrow.counterclockwise", Palette.lime) : nil
+        case .model: return ("sparkles", event.important ? Palette.lime : Palette.accent)
+        case .news: return nil
+        }
+    }
+
+    /// Catalogue logo for an OpenRouter model author.
+    static func modelLogo(_ author: String?) -> String? {
+        switch author {
+        case "openai": return "openai-api"
+        case "anthropic": return "claude-api"
+        case "deepseek": return "deepseek"
+        case "google": return "gemini-api"
+        case "x-ai": return "xai"
+        case "mistralai": return "mistral"
+        case "moonshotai": return "kimi"
+        case "qwen": return "dashscope"
+        case "minimax": return "minimax"
+        case "z-ai": return "zai"
+        case "perplexity": return "perplexity-api"
+        default: return nil
         }
     }
 
@@ -22,6 +42,14 @@ enum EventStyle {
         if let accountIntegration { return accountIntegration }
         switch event.kind {
         case .release: return "github-releases"
+        case .model: return modelLogo(NewModels.author(of: event))
+        case .news:
+            switch event.sourceName {
+            case "OpenAI News": return "openai-api"
+            case "Google DeepMind", "Google AI": return "gemini-api"
+            case "Hugging Face": return "huggingface"
+            default: return nil
+            }
         case .status:
             let name = event.sourceName.lowercased()
             if name.hasPrefix("openai") { return "openai-api" }
@@ -42,6 +70,7 @@ enum EventStyle {
         case .release where event.important: return Chip(text: "Yours", tint: Palette.accentInk)
         case .post where event.important: return Chip(text: "Resets", tint: Palette.lime, filled: true)
         case .status where event.important: return Chip(text: "Ongoing", tint: Palette.warning)
+        case .model where event.important: return Chip(text: "Your provider", tint: Palette.accentInk)
         default: return nil
         }
     }
@@ -59,7 +88,7 @@ struct EventIcon: View {
                     .frame(width: size, height: size).background(Circle().fill(Palette.hex(0x15161B)))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.12)))
             } else {
-                LogoCircle(integrationID: logo, size: size, symbol: event.kind == .status ? "waveform.path.ecg" : "sparkles")
+                LogoCircle(integrationID: logo, size: size, symbol: event.kind == .status ? "waveform.path.ecg" : event.kind == .news ? "newspaper.fill" : "sparkles")
             }
             if let badge = EventStyle.badge(event) {
                 Image(systemName: badge.symbol).font(.system(size: size * 0.2, weight: .heavy))

@@ -16,10 +16,11 @@ final class TimelineTests: XCTestCase {
     private func store(balances: @escaping AppStore.BalanceLoader = { _, _, _ in throw ConnectorError.invalidResponse },
                        releases: @escaping AppStore.ReleaseLoader = { _, _ in throw ConnectorError.invalidResponse },
                        status: @escaping AppStore.StatusLoader = { _ in throw ConnectorError.invalidResponse },
-                       posts: @escaping AppStore.PostLoader = { _, _, _, _ in throw ConnectorError.invalidResponse }) -> AppStore {
+                       posts: @escaping AppStore.PostLoader = { _, _, _, _ in throw ConnectorError.invalidResponse },
+                       feeds: @escaping AppStore.FeedLoader = { _ in Data("<rss><channel></channel></rss>".utf8) }) -> AppStore {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return AppStore(repository: StateRepository(directory: root.appendingPathComponent(".build/test-data/\(UUID().uuidString)")), vault: MemoryVault(),
-                        balances: balances, releases: releases, status: status, posts: posts)
+                        balances: balances, releases: releases, status: status, posts: posts, feeds: feeds)
     }
 
     // MARK: Resets and limits
@@ -397,5 +398,48 @@ final class TopUpDetectionTests: XCTestCase {
         XCTAssertEqual(TopUpWatch.payments(old: reading(3.43), new: reading(13.2), account: account, recorded: [], now: now).first?.money.amount, Decimal(string: "9.77"))
         XCTAssertTrue(TopUpWatch.payments(old: reading(3.43), new: reading(3.9), account: account, recorded: [], now: now).isEmpty, "Under 1.00 is noise")
         XCTAssertTrue(TopUpWatch.payments(old: reading(13), new: reading(3), account: account, recorded: [], now: now).isEmpty, "Usage lowers it")
+    }
+}
+
+final class NewsAndModelsTests: XCTestCase {
+    func testAtomAndRSSNewsBecomeRecentEvents() {
+        let now = ISO8601DateFormatter().date(from: "2026-10-20T03:00:00Z")!
+        let atom = Data("""
+        <?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Simon Willison</title>
+        <entry><title>Claude Code tips</title><link href="https://simonwillison.net/2026/Oct/19/tips/" rel="alternate"/><id>urn:1</id>
+        <updated>2026-10-19T22:10:00+00:00</updated><summary type="html">&lt;p&gt;Some &lt;em&gt;tips&lt;/em&gt;.&lt;/p&gt;</summary></entry>
+        <entry><title>Old post</title><link href="https://simonwillison.net/2026/Sep/1/old/"/><id>urn:2</id><updated>2026-09-01T10:00:00Z</updated></entry></feed>
+        """.utf8)
+        let feed = NewsFeed.all.first { $0.id == "simonw" }!
+        let events = NewsFeed.events(atom, feed: feed, now: now)
+        XCTAssertEqual(events.map(\.title), ["Claude Code tips"], "Older than a week is dropped")
+        XCTAssertEqual(events.first?.source?.absoluteString, "https://simonwillison.net/2026/Oct/19/tips/")
+        XCTAssertEqual(events.first?.detail, "Some tips.")
+        XCTAssertEqual(events.first?.kind, .news)
+
+        let rss = Data("""
+        <rss version="2.0"><channel><item><title><![CDATA[Introducing GPT-6]]></title><link>https://openai.com/index/gpt-6</link>
+        <guid>gpt-6</guid><pubDate>Mon, 19 Oct 2026 17:00:00 GMT</pubDate><description>A new model.</description></item></channel></rss>
+        """.utf8)
+        XCTAssertEqual(NewsFeed.events(rss, feed: NewsFeed.all[0], now: now).first?.title, "Introducing GPT-6")
+    }
+
+    func testNewModelsAreRecentPricedAndFlaggedForYourProviders() {
+        let now = Date(timeIntervalSince1970: 1_792_500_000)
+        let fresh = Int(now.timeIntervalSince1970) - 86400, stale = Int(now.timeIntervalSince1970) - 40 * 86400
+        let data = Data("""
+        {"data":[{"id":"deepseek/deepseek-v4.1-flash","name":"DeepSeek: V4.1 Flash","created":\(fresh),"context_length":1048576,"pricing":{"prompt":"0.00000015","completion":"0.0000006"}},
+                 {"id":"minimax/m3:free","name":"MiniMax M3 (free)","created":\(fresh - 60),"context_length":1000000,"pricing":{"prompt":"0","completion":"0"}},
+                 {"id":"openai/gpt-old","name":"Old","created":\(stale),"context_length":8000,"pricing":{"prompt":"0.00001","completion":"0.00003"}}]}
+        """.utf8)
+        let accounts = [ConnectedAccount(integrationID: "deepseek", label: "Dev", mode: .live)]
+        let events = NewModels.events(data, accounts: accounts, now: now)
+        XCTAssertEqual(events.map(\.title), ["DeepSeek: V4.1 Flash", "MiniMax M3 (free)"])
+        XCTAssertEqual(events[0].detail, "1048K context · $0.15 in, $0.60 out per million tokens")
+        XCTAssertTrue(events[0].important, "You pay DeepSeek")
+        XCTAssertFalse(events[1].important)
+        XCTAssertEqual(events[1].detail, "1000K context · free")
+        XCTAssertEqual(NewModels.author(of: events[0]), "deepseek")
+        XCTAssertTrue(NewModels.events(Data("not json".utf8), accounts: [], now: now).isEmpty)
     }
 }

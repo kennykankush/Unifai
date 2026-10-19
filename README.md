@@ -65,6 +65,8 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 | DeepSeek API | Current balances and purchased/promotional components, preserving currency | Enter an API key, then click Refresh. This endpoint supplies no payment or consumption history. |
 | ChatGPT & Codex | ChatGPT plan, Codex 5-hour and weekly limits with reset times, Codex credits, free resets and daily token use | Install Codex (`brew install codex`), then **Sign in with ChatGPT** in Unifai or run `codex login`. Unifai talks to the local Codex app (`codex app-server`) and stores no OpenAI credential. |
 | Claude subscription / Code | Claude plan (Pro, Max, Team) and sign-in state | Install Claude Code, then **Sign in with Claude** (opens `claude auth login` in Terminal). Anthropic does not share subscription usage limits with other apps, so those stay in Claude Code's `/usage`. |
+| Kimi API (Moonshot) | Available, cash and voucher balance in US dollars | Enter a platform.kimi.ai API key. Unifai only sends `GET /v1/users/me/balance`. |
+| ElevenLabs | Plan, characters used against the allowance and the reset date | Enter an API key with User read access. Unifai only sends `GET /v1/user/subscription`. Record the subscription as a schedule so renewals count toward spend. |
 | Claude API / Console | API spend for the last 30 days | Enter an Admin key (`sk-ant-admin01-...`), which Anthropic only issues to Console organizations. Unifai only calls the Cost API; Anthropic has no remaining-credit endpoint, so import credit top-ups from receipts. |
 | OpenAI API Platform | API spend per currency for the last 30 days | Enter an organization Admin key (`sk-admin-...`). Unifai only calls the Costs API; OpenAI has no prepaid balance endpoint. |
 | Azure subscriptions | Month-to-date spend, daily cost, every service and every billed resource: virtual machines with size and power state, Foundry accounts with their deployed models, storage and networking, each with its meters. Click the wallet card to see it all. | Install the Azure CLI and run `az login` (or **Sign in with Azure**). Unifai runs read-only Cost Management queries through `az` and stores no Azure credential. The account needs Cost Management Reader for costs and Reader for the resource list. |
@@ -119,9 +121,11 @@ Below it, events are grouped by day, with filters for your accounts, status page
 | Cost spike | An Azure service's latest full day costs at least twice its median over the week before and at least 1.00 more, or a service starts costing 1.00 a day. A single daily query covers the month-to-date total too. |
 | Status | Public status pages for the providers you have wallets with: OpenAI, Anthropic, Azure and DeepSeek. Unifai keeps OpenAI incidents only when they mention products you use. |
 | Release | Followed repositories. Unifai marks releases that mention a provider you pay for as **Yours**. |
+| New model | Models added to OpenRouter's public list in the last two weeks, with context length and price per million tokens. Models from providers you pay for are marked **Your provider**. Checked every six hours. |
+| News | OpenAI News, Google DeepMind, Google AI, Hugging Face and Simon Willison's weblog, from their public feeds. Anthropic publishes no feed. Turn news and models off in **Settings**. |
 | Post | X accounts you follow, using your own X API bearer token, both set in **Settings**. Unifai asks only for posts newer than the last one it saw. X bills about US$0.005 per post read and US$0.01 per account lookup; Settings shows the estimated cost this month. Posts about resets or limits get a **Resets** tag. |
 
-Unifai checks status pages, posts and releases every 30 minutes while it runs, or when you click **Check Now**. Early resets, free resets, cost spikes and reset posts also arrive as notifications.
+The **Status** panel shows each provider's state now: operational, or the ongoing incident. The **Releases** panel suggests widely used AI tools to follow, such as Ollama, llama.cpp, vLLM and LiteLLM. Unifai checks status pages, news, posts and releases every 30 minutes while it runs, or when you click **Check Now**. Early resets, free resets, cost spikes and reset posts also arrive as notifications.
 
 ## Desktop widgets
 

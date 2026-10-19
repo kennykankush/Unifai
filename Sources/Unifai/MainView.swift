@@ -1277,6 +1277,8 @@ struct MainView: View {
                     Button("Follow Repository") { editor = .repository }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                 } else if integration.id == "x-accounts" {
                     Button("Set Up in Settings") { editor = .settings }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
+                } else if integration.category == .discovery && integration.status == .ready {
+                    Button("Open Timeline") { destination = .timeline }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                 } else if [.providers, .subscriptions, .cloud].contains(integration.category) {
                     if integration.status == .ready {
                         Button("Add Account") { editor = .account(integration, nil) }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
@@ -1293,7 +1295,7 @@ struct MainView: View {
 
     // MARK: Timeline
 
-    private static let timelineFilters = ["All", "Accounts", "Status", "Releases", "Posts"]
+    private static let timelineFilters = ["All", "Accounts", "Status", "Models", "News", "Releases", "Posts"]
 
     private func timelineIncludes(_ event: TimelineEvent) -> Bool {
         switch timelineFilter {
@@ -1301,6 +1303,8 @@ struct MainView: View {
         case "Status": return event.kind == .status
         case "Releases": return event.kind == .release
         case "Posts": return event.kind == .post
+        case "Models": return event.kind == .model
+        case "News": return event.kind == .news
         default: return true
         }
     }
@@ -1366,6 +1370,7 @@ struct MainView: View {
                 .surface(padding: 20, radius: 22)
                 VStack(spacing: 18) {
                     statusSources
+                    newsSources
                     xSources
                     repositorySources
                 }
@@ -1386,23 +1391,65 @@ struct MainView: View {
         }
     }
 
+    /// The latest incident for a provider's status page, if any in the last two weeks.
+    private func latestIncident(_ feed: StatusFeed) -> TimelineEvent? {
+        (store.state.events ?? []).filter { $0.kind == .status && $0.sourceName == "\(feed.name) status" }.max { $0.date < $1.date }
+    }
+
     private var statusSources: some View {
         let feeds = StatusFeed.relevant(to: store.state.accounts)
+        let ongoing = feeds.filter { latestIncident($0)?.important == true }.count
         return VStack(alignment: .leading, spacing: 12) {
-            SectionHeading(title: "Status Pages", subtitle: feeds.isEmpty ? nil : "\(feeds.count)")
+            SectionHeading(title: "Status") {
+                if !feeds.isEmpty {
+                    Chip(text: ongoing == 0 ? "All operational" : "\(ongoing) ongoing", tint: ongoing == 0 ? Palette.positive : Palette.warning,
+                         symbol: ongoing == 0 ? "checkmark" : "exclamationmark.triangle.fill")
+                }
+            }
             if feeds.isEmpty {
                 Text("Connect OpenAI, Claude, Azure or DeepSeek wallets to watch their status pages.").font(.system(size: 12)).foregroundStyle(.secondary)
             }
             ForEach(feeds, id: \.id) { feed in
                 let logo = feed.id == "openai" ? "openai-api" : feed.id == "anthropic" ? "claude-api" : feed.id == "azure" ? "azure-subscription" : "deepseek"
+                let incident = latestIncident(feed)
                 let failed = store.timelineErrors[feed.name] != nil
-                sourceRow(logo, feed.name, failed ? "Could not read" : "Incidents from the last 14 days") {
-                    Circle().fill(failed ? Palette.warning : Palette.positive).frame(width: 7, height: 7)
+                let ongoingIncident = incident?.important == true
+                let subtitle = failed ? "Could not read the status page"
+                    : ongoingIncident ? incident!.title.replacingOccurrences(of: "\(feed.name): ", with: "")
+                    : incident.map { "Operational · last incident \($0.date.formatted(.relative(presentation: .named)))" } ?? "Operational · no incidents in 14 days"
+                Group {
+                    if let link = incident?.source, ongoingIncident {
+                        Link(destination: link) { sourceRow(logo, feed.name, subtitle) { statusDot(ongoing: true, failed: failed) } }.buttonStyle(.plain)
+                    } else {
+                        sourceRow(logo, feed.name, subtitle) { statusDot(ongoing: false, failed: failed) }
+                    }
                 }
+                .help(subtitle)
             }
             if let checked = store.state.timelineCheckedAt {
                 Text("Checked \(checked.formatted(.relative(presentation: .named)))").font(.system(size: 11)).foregroundStyle(.tertiary)
             }
+        }
+        .surface(padding: 18, radius: 22)
+    }
+
+    private func statusDot(ongoing: Bool, failed: Bool) -> some View {
+        Circle().fill(failed ? Color.secondary : ongoing ? Palette.warning : Palette.positive).frame(width: 8, height: 8)
+            .overlay(Circle().stroke((ongoing ? Palette.warning : Palette.positive).opacity(0.35), lineWidth: 4).opacity(failed ? 0 : 1))
+    }
+
+    private var newsSources: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: "AI News") {
+                Text(store.state.newsFeeds == false ? "Off" : "\(NewsFeed.all.count) feeds").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            }
+            if store.state.newsFeeds == false {
+                Text("News feeds are off. Turn them on in Settings.").font(.system(size: 12)).foregroundStyle(.secondary)
+            } else {
+                FlowChips(items: NewsFeed.all.map(\.name))
+            }
+            Text(store.state.newModels == false ? "New models from OpenRouter are off." : "New models from OpenRouter's list, every six hours.")
+                .font(.system(size: 11)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
         }
         .surface(padding: 18, radius: 22)
     }
@@ -1453,11 +1500,31 @@ struct MainView: View {
                 }
                 .help(repository.lastError ?? "")
             }
+            let followed = Set(store.state.repositories.map { $0.slug.lowercased() })
+            let suggestions = Self.suggestedRepositories.filter { !followed.contains($0.lowercased()) }.prefix(5)
+            if !suggestions.isEmpty && store.state.repositories.count < 10 {
+                Text("SUGGESTED").font(.system(size: 10, weight: .bold)).tracking(1).foregroundStyle(.tertiary).padding(.top, 4)
+                FlowLayout(spacing: 6) {
+                    ForEach(Array(suggestions), id: \.self) { slug in
+                        Button { perform { try store.addRepository(slug, includePrereleases: false) }; Task { await store.refreshDueRepositories() } } label: {
+                            Label(slug, systemImage: "plus").font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 8).frame(height: 24)
+                                .background(Capsule().fill(Palette.raised))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Follow \(slug) releases")
+                    }
+                }
+            }
             Button { editor = .repository } label: { Label("Follow Repository", systemImage: "plus") }
                 .buttonStyle(PillButtonStyle(compact: true))
         }
         .surface(padding: 18, radius: 22)
     }
+
+    /// Widely used AI tools whose releases are worth knowing about.
+    private static let suggestedRepositories = ["ollama/ollama", "ggml-org/llama.cpp", "vllm-project/vllm", "BerriAI/litellm",
+                                                "modelcontextprotocol/servers", "openai/openai-agents-python", "anthropics/claude-agent-sdk-python", "cline/cline"]
 }
 
 /// Hover highlight for rows inside surfaces.

@@ -104,6 +104,8 @@ struct AccountEditor: View {
         case "openrouter": return "OpenRouter requires a management key. It has broad account authority; Unifai only sends GET /api/v1/credits."
         case "openai-api": return "Create an organization Admin key at platform.openai.com > Settings > Organization > Admin keys. It has broad access; Unifai only sends GET /v1/organization/costs."
         case "claude-api": return "Create an Admin key in Claude Console > Settings > Admin keys (organizations only). It has broad access; Unifai only sends GET /v1/organizations/cost_report. Import top-ups from receipts on the Payments page."
+        case "kimi": return "Create an API key at platform.kimi.ai > API Keys. Unifai only sends GET /v1/users/me/balance."
+        case "elevenlabs": return "Create an API key at elevenlabs.io > Developers > API Keys; it needs User read access. Unifai only sends GET /v1/user/subscription."
         default: return "Unifai only sends GET /user/balance with the key you enter."
         }
     }
@@ -282,6 +284,8 @@ struct SettingsEditor: View {
     @State private var xToken = ""
     @State private var removeXToken = false
     @State private var xHandles = ""
+    @State private var newsFeeds = true
+    @State private var newModels = true
     @State private var error: String?
     private var currencies: [String] {
         let recorded = Set(store.state.payments.map(\.money.currency))
@@ -303,6 +307,10 @@ struct SettingsEditor: View {
                 Toggle("Refresh wallets in the background every hour", isOn: $autoRefresh)
                 Toggle("Notifications", isOn: $notifications)
             } header: { Text("Automation") } footer: { Text("Notifications cover low credit, failed refreshes, renewals due tomorrow, recorded renewals, usage limits resetting, early resets, free resets, cost spikes and your budget. Everything is computed on this Mac.") }
+            Section {
+                Toggle("AI news feeds", isOn: $newsFeeds)
+                Toggle("New models from OpenRouter", isOn: $newModels)
+            } header: { Text("Timeline") } footer: { Text("News from OpenAI, Google DeepMind, Google AI, Hugging Face and Simon Willison's weblog, and models added to OpenRouter in the last two weeks. Public feeds, read without an account.") }
             Section {
                 TextField("Accounts to follow", text: $xHandles, prompt: Text("thsottiaux, OpenAIDevs"))
                 if store.hasXToken && !removeXToken {
@@ -326,6 +334,8 @@ struct SettingsEditor: View {
             autoRefresh = store.state.autoRefresh != false
             notifications = Notifier.shared.enabled
             xHandles = (store.state.xHandles ?? []).joined(separator: ", ")
+            newsFeeds = store.state.newsFeeds != false
+            newModels = store.state.newModels != false
         }
     }
     private func save() {
@@ -338,6 +348,8 @@ struct SettingsEditor: View {
             }
             try store.setAutoRefresh(autoRefresh)
             try store.setXHandles(xHandles)
+            if newsFeeds != (store.state.newsFeeds != false) { try store.setNewsFeeds(newsFeeds) }
+            if newModels != (store.state.newModels != false) { try store.setNewModels(newModels) }
             if removeXToken { try store.setXToken(nil) }
             else if !xToken.trimmingCharacters(in: .whitespaces).isEmpty { try store.setXToken(xToken) }
             Notifier.shared.enabled = notifications

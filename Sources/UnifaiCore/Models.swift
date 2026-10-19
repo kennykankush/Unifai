@@ -481,6 +481,10 @@ public struct PersistentState: Codable, Equatable {
     public var xUserLookups: [String: Int]?
     /// Repositories already followed once for a wallet, so removing one sticks.
     public var autoFollowed: [String]?
+    /// AI news feeds and new-model listings in the Timeline. Nil means on.
+    public var newsFeeds: Bool?
+    public var newModels: Bool?
+    public var modelsCheckedAt: Date?
     public init() {}
 }
 

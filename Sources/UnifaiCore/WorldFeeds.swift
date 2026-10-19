@@ -87,7 +87,11 @@ enum RSS {
             formatter.dateFormat = format
             if let date = formatter.date(from: text.trimmingCharacters(in: .whitespacesAndNewlines)) { return date }
         }
-        return ISO8601DateFormatter().date(from: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let iso = ISO8601DateFormatter()
+        if let date = iso.date(from: trimmed) { return date }
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso.date(from: trimmed)
     }
 
     final class Reader: NSObject, XMLParserDelegate {
@@ -95,7 +99,11 @@ enum RSS {
         private var current: Item?
         private var text = ""
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
-            if name == "item" { current = Item() }
+            if name == "item" || name == "entry" { current = Item() }
+            // Atom links carry the URL as an attribute.
+            if name == "link", current != nil, let href = attributes["href"], attributes["rel"] == nil || attributes["rel"] == "alternate" {
+                current?.link = URL(string: href)
+            }
             text = ""
         }
         func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
@@ -104,12 +112,12 @@ enum RSS {
             guard current != nil else { return }
             let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
             switch name {
-            case "title": current?.title = value
-            case "link": current?.link = URL(string: value)
-            case "guid": current?.guid = value
-            case "pubDate": current?.date = RSS.date(value)
-            case "description": if current?.description.isEmpty == true { current?.description = value }
-            case "item": if let item = current { items.append(item) }; current = nil
+            case "title": if current?.title.isEmpty == true { current?.title = value }
+            case "link": if !value.isEmpty { current?.link = URL(string: value) }
+            case "guid", "id": if current?.guid == nil { current?.guid = value }
+            case "pubDate", "published", "updated": if current?.date == nil { current?.date = RSS.date(value) }
+            case "description", "summary", "content": if current?.description.isEmpty == true { current?.description = value }
+            case "item", "entry": if let item = current { items.append(item) }; current = nil
             default: break
             }
             text = ""
@@ -311,5 +319,93 @@ public enum ReleaseRelevance {
         }.filter { !$0.isEmpty && !$0.lowercased().hasPrefix("full changelog") && !$0.hasPrefix("<!--") }
         let text = HTMLText.plain(lines.prefix(8).joined(separator: " · "))
         return text.isEmpty ? nil : HTMLText.trimmed(text, to: 280)
+    }
+}
+
+// MARK: - AI news
+
+/// Public feeds about AI products and research, read without an account.
+public struct NewsFeed: Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let url: URL
+    public static let all: [NewsFeed] = [
+        NewsFeed(id: "openai", name: "OpenAI News", url: URL(string: "https://openai.com/news/rss.xml")!),
+        NewsFeed(id: "deepmind", name: "Google DeepMind", url: URL(string: "https://deepmind.google/blog/rss.xml")!),
+        NewsFeed(id: "google-ai", name: "Google AI", url: URL(string: "https://blog.google/technology/ai/rss/")!),
+        NewsFeed(id: "huggingface", name: "Hugging Face", url: URL(string: "https://huggingface.co/blog/feed.xml")!),
+        NewsFeed(id: "simonw", name: "Simon Willison", url: URL(string: "https://simonwillison.net/atom/everything/")!),
+    ]
+
+    /// The newest posts from the last `days` days, at most `limit`.
+    public static func events(_ data: Data, feed: NewsFeed, now: Date = .now, days: Double = 7, limit: Int = 4) -> [TimelineEvent] {
+        RSS.items(data).compactMap { item -> TimelineEvent? in
+            guard let date = item.date, date > now.addingTimeInterval(-days * 86400), date <= now.addingTimeInterval(3600), !item.title.isEmpty else { return nil }
+            let key = item.guid ?? item.link?.absoluteString ?? item.title
+            return TimelineEvent(id: "news-\(feed.id)-\(key)", date: date, kind: .news, title: HTMLText.plain(item.title),
+                                 detail: HTMLText.trimmed(HTMLText.plain(item.description), to: 200),
+                                 source: item.link.flatMap { $0.scheme == "https" ? $0 : nil }, sourceName: feed.name)
+        }
+        .sorted { $0.date > $1.date }.prefix(limit).map { $0 }
+    }
+}
+
+// MARK: - New models
+
+/// Models newly listed on OpenRouter, from its public model list (no key).
+public enum NewModels {
+    public static let url = URL(string: "https://openrouter.ai/api/v1/models")!
+
+    /// OpenRouter author prefix for each wallet you pay, so models from your providers stand out.
+    static let walletAuthors: [String: [String]] = [
+        "codex": ["openai"], "openai-api": ["openai"], "claude-subscription": ["anthropic"], "claude-api": ["anthropic"],
+        "deepseek": ["deepseek"], "kimi": ["moonshotai"], "openrouter": [],
+    ]
+
+    struct Listing: Decodable {
+        struct Model: Decodable {
+            struct Pricing: Decodable { let prompt: String?; let completion: String? }
+            let id: String; let name: String; let created: Int?; let context_length: Int?; let pricing: Pricing?
+        }
+        let data: [Model]
+    }
+
+    public static func events(_ data: Data, accounts: [ConnectedAccount], now: Date = .now, days: Double = 14, limit: Int = 12) -> [TimelineEvent] {
+        guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else { return [] }
+        let yours = Set(accounts.flatMap { walletAuthors[$0.integrationID] ?? [] })
+        return listing.data.compactMap { model -> TimelineEvent? in
+            guard let created = model.created.map({ Date(timeIntervalSince1970: TimeInterval($0)) }), created > now.addingTimeInterval(-days * 86400),
+                  model.id.range(of: #"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$"#, options: .regularExpression) != nil else { return nil }
+            let author = String(model.id.split(separator: "/").first ?? "")
+            var facts: [String] = []
+            if let context = model.context_length { facts.append(context >= 1000 ? "\(context / 1000)K context" : "\(context) context") }
+            if let prompt = model.pricing?.prompt.flatMap(Double.init), let completion = model.pricing?.completion.flatMap(Double.init) {
+                facts.append(prompt == 0 && completion == 0 ? "free" : String(format: "$%.2f in, $%.2f out per million tokens", prompt * 1_000_000, completion * 1_000_000))
+            }
+            return TimelineEvent(id: "model-\(model.id)", date: created, kind: .model, title: model.name, detail: facts.joined(separator: " · "),
+                                 source: URL(string: "https://openrouter.ai/\(model.id)"), sourceName: "OpenRouter", important: yours.contains(author))
+        }
+        .sorted { $0.date > $1.date }.prefix(limit).map { $0 }
+    }
+
+    /// The OpenRouter author of a model event ("deepseek" for model-deepseek/deepseek-v4).
+    public static func author(of event: TimelineEvent) -> String? {
+        guard event.kind == .model, event.id.hasPrefix("model-") else { return nil }
+        return event.id.dropFirst(6).split(separator: "/").first.map(String.init)
+    }
+}
+
+/// Public feeds and lists fetched without credentials.
+public struct FeedClient {
+    private let session: URLSession
+    public init(session: URLSession = BalanceClient.privateSession()) { self.session = session }
+    public func fetch(_ url: URL) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        request.setValue("Unifai", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ConnectorError.invalidResponse }
+        guard http.statusCode == 200 else { throw ConnectorError.unavailable(http.statusCode) }
+        guard data.count < 4_000_000 else { throw ConnectorError.invalidResponse }
+        return data
     }
 }

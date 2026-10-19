@@ -108,6 +108,31 @@ enum FixtureWorkspace {
         return Data("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Synthetic</title>\(items)</channel></rss>".utf8)
     }
 
+    /// Synthetic news feeds and model list; the demo never contacts them.
+    static func feeds(_ url: URL) async throws -> Data {
+        let now = Date.now
+        if url == NewModels.url {
+            let created = Int(now.addingTimeInterval(-26 * 3600).timeIntervalSince1970), older = Int(now.addingTimeInterval(-4 * 86400).timeIntervalSince1970)
+            return Data("""
+            {"data":[{"id":"deepseek/deepseek-v4.1-flash","name":"DeepSeek: DeepSeek V4.1 Flash","created":\(created),"context_length":1048576,"pricing":{"prompt":"0.00000015","completion":"0.0000006"}},
+                     {"id":"minimax/minimax-m3.1-flash:free","name":"MiniMax: MiniMax M3.1 Flash (free)","created":\(older),"context_length":1000000,"pricing":{"prompt":"0","completion":"0"}}]}
+            """.utf8)
+        }
+        guard let feed = NewsFeed.all.first(where: { $0.url == url }), ["openai", "huggingface"].contains(feed.id) else {
+            return Data("<rss version=\"2.0\"><channel></channel></rss>".utf8)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let date = formatter.string(from: now.addingTimeInterval(feed.id == "openai" ? -5 * 3600 : -30 * 3600))
+        let (title, detail) = feed.id == "openai"
+            ? ("Introducing faster Codex cloud tasks", "Cloud tasks now start in seconds and can run in parallel across repositories.")
+            : ("Open models you can run on a laptop", "A tour of small open-weight models and the hardware they need.")
+        return Data("""
+        <rss version="2.0"><channel><item><title>\(title)</title><link>https://example.com/\(feed.id)</link><guid>fixture-\(feed.id)</guid>
+        <pubDate>\(date)</pubDate><description>\(detail)</description></item></channel></rss>
+        """.utf8)
+    }
+
     /// Synthetic X posts; the demo never contacts X.
     static func posts(_ token: String, _ handle: String, _ userID: String?, _ sinceID: String?) async throws -> XClient.Result {
         guard sinceID == nil else { return .init(userID: "100", posts: [], lookups: 0) }
