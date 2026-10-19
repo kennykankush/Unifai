@@ -8,6 +8,7 @@ Unifai is a local macOS app that shows where your AI money stands: remaining cre
 - **Payments** keeps a currency-preserving ledger of top-ups, subscription charges and refunds, with spend charts.
 - **Subscriptions** tracks expected renewals separately from money actually paid.
 - **Timeline** logs usage resets, limits reached, free resets, cloud cost spikes, provider outages, releases and posts from X accounts you follow. It catches early resets, such as when OpenAI resets Codex limits for everyone, and shows which wallet has room right now.
+- **Widgets** put AI spend, wallets and which wallet has room right now on your desktop or in Notification Center.
 - **Agent access** exposes balances, spend, renewals, headroom and the timeline to Claude Code, Codex, Cursor or any MCP client, read-only.
 
 Everything stays on your Mac. There is no account, server or sync. The first native milestone was verified on 2026-10-19; [verification evidence](evidence/VERIFICATION.md) records the checks and their limits.
@@ -117,6 +118,18 @@ Below it, events are grouped by day, with filters for your accounts, status page
 
 Unifai checks status pages, posts and releases every 30 minutes while it runs, or when you click **Check Now**. Early resets, free resets, cost spikes and reset posts also arrive as notifications.
 
+## Desktop widgets
+
+Unifai has three widgets. To add one, Control-click the desktop, choose **Edit Widgets**, and search for Unifai:
+
+| Widget | Sizes | Shows |
+| --- | --- | --- |
+| **Right Now** | Small, medium | The wallet with the most room, its usage left, when it resets and any free resets. Medium adds the next two wallets. |
+| **AI Spend** | Small, medium | This month's AI and cloud spend with your budget or pay-as-you-go usage. Medium adds the last six months and the next renewal. |
+| **Wallets** | Small, medium, large | Balances, plans and usage limits. Large adds the latest timeline event. |
+
+Click a widget to open Unifai on the matching page. The app writes a small snapshot to a shared container (`~/Library/Group Containers/<Team ID>.dev.unifai`) whenever its data changes. The widget is sandboxed and only reads that file: it has no keys and makes no network requests. Widgets show figures as of the app's last refresh, so keep Unifai running (it can sit in the menu bar) for them to stay current.
+
 ## Let agents read your balances (MCP)
 
 `unifai-mcp` is a read-only MCP server over stdio. Any MCP client, such as Claude Code, Codex or Cursor, can use it to answer "how much credit do I have left?" from the same data the app shows.
@@ -199,7 +212,7 @@ bash scripts/release.sh
 
 OpenRouter and DeepSeek have contract, parsing and failure-path validation with synthetic fixtures. Authentication against real provider accounts remains unverified until keys are entered. No paid provider or news request was made during development.
 
-WidgetKit, Claude subscription usage limits (Anthropic offers no interface for them), cost spikes for clouds other than Azure, and sync remain out of scope. Reset detection compares two readings, so Unifai dates a reset to the first reading that shows it, up to an hour after it happened. Light appearance, VoiceOver operation and macOS 14 hardware have not received hands-on verification. Releases are Apple silicon only.
+Claude subscription usage limits (Anthropic offers no interface for them), cost spikes for clouds other than Azure, and sync remain out of scope. Reset detection compares two readings, so Unifai dates a reset to the first reading that shows it, up to an hour after it happened. Light appearance, VoiceOver operation and macOS 14 hardware have not received hands-on verification. Releases are Apple silicon only.
 
 ## Credits
 

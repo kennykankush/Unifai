@@ -60,6 +60,11 @@ struct UnifaiApp: App {
             AppRuntime.initialScroll = UnitPoint(x: 0, y: min(1, max(0, fraction)))
         }
         _store = StateObject(wrappedValue: model)
+        // Visual checks: render every widget size from this workspace's data to PNGs, then exit.
+        if fixtureMode || channel == "dev", let index = args.firstIndex(of: "--export-widgets"), args.indices.contains(index + 1) {
+            WidgetPreviews.export(WidgetPublisher.snapshot(model), to: URL(fileURLWithPath: args[index + 1], isDirectory: true))
+            exit(0)
+        }
     }
     var body: some Scene {
         Window("Unifai", id: "main") {
@@ -123,10 +128,12 @@ struct MainWindowCommands: Commands {
     static var showCompanion: (() -> Void)?
     static var openMain: (() -> Void)?
     static var openSettings: (() -> Void)?
+    static var navigate: ((Destination) -> Void)?
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var companion: MenuBarController?
+    private var widgets: WidgetPublisher?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -134,10 +141,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.start()
         if let store = AppRuntime.store {
             companion = MenuBarController(store: store, fixtureMode: AppRuntime.fixtureMode)
+            widgets = WidgetPublisher(store: store)
             AppRuntime.showCompanion = { [weak self] in self?.companion?.toggle() }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// Widget taps open unifai://<page> (unifai-dev:// for the dev build).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let host = urls.first?.host?.lowercased() else { return }
+        let destination: Destination? = ["payments": .payments, "wallets": .accounts, "timeline": .timeline, "subscriptions": .subscriptions, "overview": .today][host]
+        AppRuntime.openMain?()
+        if let destination { AppRuntime.navigate?(destination) }
+    }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { AppRuntime.openMain?() }
         return true

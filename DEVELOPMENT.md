@@ -49,7 +49,7 @@ Commands, observed values and retained logs are indexed in [evidence/VERIFICATIO
 
 Authenticated OpenRouter and DeepSeek responses have not been witnessed against Hadi’s accounts. Their supported fields and failures were exercised with fixtures; real keys must be entered through the app. The anonymous public GitHub client was exercised live once. No paid API request, purchase, plan change or signing-account enrollment occurred. The repository was published to GitHub on 2026-10-19 at the owner's request.
 
-The app has a local ad-hoc signature and no distribution qualification. macOS 14 runtime compatibility, light appearance and VoiceOver operation remain unverified. The persisted store assumes one process per data directory and has no automatic backup or sync.
+Local builds are signed with this Mac's Developer ID certificate when it has one, which the widget's shared app group requires; without one they are signed ad hoc and ship no widget. Official releases come from `scripts/release.sh`. macOS 14 runtime compatibility, light appearance and VoiceOver operation remain unverified. The persisted store assumes one process per data directory and has no automatic backup or sync.
 
 WidgetKit remains the intended follow-on surface. Quotas and reset windows, Claude and OpenAI reporting, invoice imports, public feeds, richer discovery and notifications remain deferred. X remains disabled. This milestone keeps the broader hub visible without claiming those integrations work.
 

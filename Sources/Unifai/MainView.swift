@@ -114,6 +114,7 @@ struct MainView: View {
         .onAppear {
             AppRuntime.openMain = { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
             AppRuntime.openSettings = { editor = .settings }
+            AppRuntime.navigate = { destination = $0 }
             AppRuntime.scheduleTestClick()
         }
         .sheet(item: $editor) { item in

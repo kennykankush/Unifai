@@ -34,25 +34,27 @@ enum Palette {
     static let hero = [hex(0x3D1FD8), hex(0x8A3BFF), hex(0xFF6A88)]
 
     /// Three-stop brand gradients for wallet and plan cards. Mid-dark stops keep white text legible.
-    static func brand(_ integrationID: String?) -> [Color] {
+    static func brand(_ integrationID: String?) -> [Color] { brandHex(integrationID).map(hex) }
+
+    static func brandHex(_ integrationID: String?) -> [UInt32] {
         switch integrationID {
-        case "openrouter": return [hex(0x4B3BE8), hex(0x7C4DFF), hex(0xC064F0)]
-        case "deepseek": return [hex(0x1E4FE0), hex(0x3D7BFF), hex(0x5EA0FF)]
-        case "openai-api", "chatgpt", "codex": return [hex(0x0A6E55), hex(0x12A07C), hex(0x3CCB9F)]
-        case "claude-api", "claude-subscription": return [hex(0xA8401F), hex(0xD8693F), hex(0xEE9466)]
-        case "gemini-api", "gemini-consumer", "gemini-cli", "vertex": return [hex(0x2F5BD8), hex(0x7A5CE8), hex(0xC77ADB)]
-        case "azure-subscription": return [hex(0x0B4FB3), hex(0x1C7BE0), hex(0x3FA2F2)]
-        case "aws": return [hex(0x9A5A0C), hex(0xD18419), hex(0xEFA53A)]
-        case "gcp": return [hex(0x1F5BC6), hex(0x2F8E5A), hex(0xE0A93A)]
+        case "openrouter": return [0x4B3BE8, 0x7C4DFF, 0xC064F0]
+        case "deepseek": return [0x1E4FE0, 0x3D7BFF, 0x5EA0FF]
+        case "openai-api", "chatgpt", "codex": return [0x0A6E55, 0x12A07C, 0x3CCB9F]
+        case "claude-api", "claude-subscription": return [0xA8401F, 0xD8693F, 0xEE9466]
+        case "gemini-api", "gemini-consumer", "gemini-cli", "vertex": return [0x2F5BD8, 0x7A5CE8, 0xC77ADB]
+        case "azure-subscription": return [0x0B4FB3, 0x1C7BE0, 0x3FA2F2]
+        case "aws": return [0x9A5A0C, 0xD18419, 0xEFA53A]
+        case "gcp": return [0x1F5BC6, 0x2F8E5A, 0xE0A93A]
         case "cursor", "github-releases", "github-private", "github-stars", "copilot", "x-accounts", "x-for-you", "xai", "vercel":
-            return [hex(0x23242B), hex(0x383A45), hex(0x5A5D6B)]
-        case nil: return [hex(0x2C2D36), hex(0x41434F), hex(0x6A6D7C)]
+            return [0x23242B, 0x383A45, 0x5A5D6B]
+        case nil: return [0x2C2D36, 0x41434F, 0x6A6D7C]
         default:
-            let sets: [[Color]] = [
-                [hex(0xB8205E), hex(0xE2457F), hex(0xF27BA6)],
-                [hex(0xA9600A), hex(0xD48820), hex(0xE9A843)],
-                [hex(0x0D6F70), hex(0x1E9B98), hex(0x45C2B9)],
-                [hex(0x3F6E12), hex(0x66A12A), hex(0x93C94A)]
+            let sets: [[UInt32]] = [
+                [0xB8205E, 0xE2457F, 0xF27BA6],
+                [0xA9600A, 0xD48820, 0xE9A843],
+                [0x0D6F70, 0x1E9B98, 0x45C2B9],
+                [0x3F6E12, 0x66A12A, 0x93C94A]
             ]
             let hash = integrationID!.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
             return sets[hash % sets.count]

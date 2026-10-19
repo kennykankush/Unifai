@@ -61,11 +61,12 @@ bash scripts/swift-local.sh test >/dev/null
 
 step "Assembling Unifai $version (release build)"
 rm -rf dist && mkdir -p dist
+export UNIFAI_TEAM_ID="$(bash scripts/team-id.sh "$identity")"
+[[ -n "$UNIFAI_TEAM_ID" ]] || fail "Could not read the Team ID of the signing identity."
 bash scripts/assemble-app.sh release release "$app" >/dev/null
 
 step "Signing with Developer ID (hardened runtime)"
-codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/unifai-mcp"
-codesign --force --options runtime --timestamp --sign "$identity" "$app"
+bash scripts/sign-app.sh "$app" "$identity" --release
 codesign --verify --strict --verbose=2 "$app"
 
 package() { rm -f "$zip"; ditto -c -k --keepParent "$app" "$zip"; }
