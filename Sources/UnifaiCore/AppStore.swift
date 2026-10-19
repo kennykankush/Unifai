@@ -109,6 +109,21 @@ public final class AppStore: ObservableObject {
             throw error
         }
     }
+    /// Turns a live wallet into manual records, keeping its payments and schedules. For providers whose
+    /// connector cannot work for this account, such as Anthropic's Cost API on an individual account.
+    public func switchToManual(_ id: UUID) throws {
+        guard !refreshingAccounts.contains(id), loadFailure == nil else { throw ValidationError.message("Wait for the refresh to finish.") }
+        guard state.accounts.contains(where: { $0.id == id && $0.mode == .live }) else { return }
+        try change { next in
+            guard let index = next.accounts.firstIndex(where: { $0.id == id }) else { return }
+            next.accounts[index].mode = .manual
+            next.accounts[index].snapshot = nil
+            next.accounts[index].lastError = nil
+            next.accounts[index].lastAttempt = nil
+        }
+        try? vault.delete(accountID: id)
+    }
+
     public func removeAccount(_ id: UUID) throws {
         guard !refreshingAccounts.contains(id), loadFailure == nil else { throw ValidationError.message("Wait for the refresh to finish.") }
         guard !state.payments.contains(where: { $0.accountID == id }), !state.subscriptions.contains(where: { $0.accountID == id }) else {

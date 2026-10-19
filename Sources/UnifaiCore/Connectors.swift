@@ -273,7 +273,8 @@ public enum LocalTool {
         if process.isRunning { process.terminate(); throw ValidationError.message("\(tool.lastPathComponent) did not answer in time.") }
         collected.append(output.fileHandleForReading.readDataToEndOfFile())
         let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return (collected, String(message.prefix(400)), process.terminationStatus)
+        // Keep enough to classify: the Azure CLI puts its "az login" hint after a long error line.
+        return (collected, String(message.prefix(4000)), process.terminationStatus)
     }
     static func environment(for tool: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
@@ -552,6 +553,11 @@ public struct AzureCostClient {
     }
 
     static func cliError(_ message: String) -> Error {
+        // Entra ID asks for multi-factor or interactive sign-in (AADSTS50076, 50079, 50158 and similar).
+        if message.contains("AADSTS50076") || message.contains("AADSTS50079") || message.contains("AADSTS50158")
+            || message.localizedCaseInsensitiveContains("multi-factor") || message.localizedCaseInsensitiveContains("interaction_required") {
+            return ValidationError.message("Azure needs you to sign in again with multi-factor authentication. Click Sign In (or run az login in Terminal), then refresh.")
+        }
         if message.localizedCaseInsensitiveContains("az login") || message.localizedCaseInsensitiveContains("expired") {
             return ValidationError.message("The Azure CLI sign-in has expired. Run az login in Terminal, then refresh.")
         }

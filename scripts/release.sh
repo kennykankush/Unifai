@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build, sign, notarize and publish an official Unifai release, then update the Homebrew tap.
+# Build, sign, notarize and publish an official Unifai release, then update the cask in Casks/,
+# which makes this repository its own Homebrew tap.
 #
 # Usage:
 #   scripts/release.sh            full release of the version in VERSION
@@ -13,9 +14,9 @@
 #   2. Notarization credentials saved as a keychain profile:
 #        xcrun notarytool store-credentials unifai --apple-id <apple id> --team-id <team id>
 #      (uses an app-specific password from account.apple.com)
-#   3. gh signed in with permission to push to this repository and the tap.
+#   3. gh signed in with permission to push to this repository.
 #
-# Overrides: UNIFAI_SIGNING_IDENTITY, UNIFAI_NOTARY_PROFILE (default "unifai"), UNIFAI_TAP (default <owner>/homebrew-tap).
+# Overrides: UNIFAI_SIGNING_IDENTITY, UNIFAI_NOTARY_PROFILE (default "unifai").
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,7 +33,7 @@ tag="v$version"
 profile="${UNIFAI_NOTARY_PROFILE:-unifai}"
 repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 owner="${repo%%/*}"
-tap="${UNIFAI_TAP:-$owner/homebrew-tap}"
+tap="$owner/unifai"
 app="$PWD/dist/Unifai.app"
 zip="$PWD/dist/Unifai-$version.zip"
 
@@ -97,7 +98,7 @@ step "Publishing $tag to GitHub"
 previous="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 notes="$(mktemp)"
 {
-    printf 'Install or update with Homebrew:\n\n```sh\nbrew install --cask %s/unifai\nbrew upgrade --cask unifai\n```\n\n' "${tap/homebrew-/}"
+    printf 'Install with Homebrew (this repository is its own tap):\n\n```sh\nbrew tap %s https://github.com/%s\nbrew trust %s\nbrew install --cask unifai\n```\n\nUpdate with `brew upgrade --cask unifai`.\n\n' "$tap" "$repo" "$tap"
     if (( notarize )); then
         printf 'Signed with Developer ID and notarized by Apple. Apple silicon, macOS 14 or later.\n\n## Changes\n\n'
     else
@@ -110,18 +111,13 @@ git push -q origin "$tag"
 gh release create "$tag" "$zip" --title "Unifai $version" --notes-file "$notes"
 rm -f "$notes"
 
-step "Updating Homebrew tap $tap"
-if ! gh repo view "$tap" >/dev/null 2>&1; then
-    gh repo create "$tap" --public --description "Homebrew tap for Unifai" >/dev/null
-fi
+step "Updating Casks/unifai.rb"
 caveats=""
 if (( ! notarize )); then
     caveats=$'\n  caveats <<~EOS\n    This build is signed with Developer ID but not notarized.\n    If macOS blocks the first launch, open System Settings > Privacy & Security\n    and click Open Anyway.\n  EOS\n'
 fi
-work="$(mktemp -d)"
-git clone -q "https://github.com/$tap.git" "$work/tap" 2>/dev/null || { mkdir -p "$work/tap"; git -C "$work/tap" init -q -b main; git -C "$work/tap" remote add origin "https://github.com/$tap.git"; }
-mkdir -p "$work/tap/Casks"
-cat > "$work/tap/Casks/unifai.rb" <<CASK
+team="$(bash scripts/team-id.sh "$identity")"
+cat > Casks/unifai.rb <<CASK
 cask "unifai" do
   version "$version"
   sha256 "$sha"
@@ -142,24 +138,13 @@ $caveats
   zap trash: [
     "~/Library/Application Support/Unifai",
     "~/Library/Preferences/dev.unifai.app.plist",
+    "~/Library/Group Containers/$team.dev.unifai",
   ]
 end
 CASK
-if [[ ! -f "$work/tap/README.md" ]]; then
-    cat > "$work/tap/README.md" <<README
-# Homebrew tap
-
-\`\`\`sh
-brew install --cask ${tap/homebrew-/}/unifai
-\`\`\`
-
-Update with \`brew upgrade --cask unifai\`. Source: https://github.com/$repo
-README
-fi
-git -C "$work/tap" add -A
-git -C "$work/tap" commit -q -m "unifai $version"
-git -C "$work/tap" push -q origin HEAD:main
-rm -rf "$work"
+git add Casks/unifai.rb
+git commit -q -m "Cask: unifai $version"
+git push -q origin HEAD:main
 
 step "Released Unifai $version"
-printf 'Release: https://github.com/%s/releases/tag/%s\nInstall: brew install --cask %s/unifai\n' "$repo" "$tag" "${tap/homebrew-/}"
+printf 'Release: https://github.com/%s/releases/tag/%s\nInstall: brew tap %s https://github.com/%s && brew install --cask unifai\n' "$repo" "$tag" "$tap" "$repo"

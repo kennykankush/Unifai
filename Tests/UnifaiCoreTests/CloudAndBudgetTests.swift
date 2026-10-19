@@ -76,3 +76,25 @@ final class CloudAndBudgetTests: XCTestCase {
         XCTAssertFalse(snapshot.reportedConsumption.isEmpty)
     }
 }
+
+extension CloudAndBudgetTests {
+    func testAzureMultiFactorPromptIsExplained() {
+        let long = "ERROR: AADSTS50076: Due to a configuration change made by your administrator, or because you moved to a new location, you must use multi-factor authentication to access '797f4846'. Trace ID: x Correlation ID: y Timestamp: 2026-10-19 18:05:18Z\nRun the command below to authenticate interactively; additional arguments may be added as needed:\naz logout\naz login --tenant \"t\""
+        XCTAssertTrue((AzureCostClient.cliError(long) as? ValidationError)?.errorDescription?.contains("multi-factor") == true)
+    }
+
+    @MainActor
+    func testSwitchToManualKeepsRecordsAndDropsTheKey() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vault = MemoryVault()
+        let store = AppStore(repository: StateRepository(directory: root.appendingPathComponent(".build/test-data/\(UUID().uuidString)")), vault: vault)
+        try store.addAccount(integrationID: "claude-api", label: "Dev", billingScope: "Hadi", mode: .live, credential: "sk-ant-api-key")
+        let id = store.state.accounts[0].id
+        try store.savePayment(.init(accountID: id, description: "Claude API credits", kind: .topUp, money: Money(Decimal(string: "10.9")!, "USD"), paidAt: .now.addingTimeInterval(-86400)))
+        try store.switchToManual(id)
+        XCTAssertEqual(store.state.accounts[0].mode, .manual)
+        XCTAssertNil(store.state.accounts[0].lastError)
+        XCTAssertEqual(store.state.payments.count, 1)
+        XCTAssertNil(try vault.read(accountID: id))
+    }
+}

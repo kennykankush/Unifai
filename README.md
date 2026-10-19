@@ -28,7 +28,9 @@ Screenshots use the synthetic demo workspace described below; no real account da
 Install the signed, notarized app with Homebrew:
 
 ```sh
-brew install --cask kennykankush/tap/unifai
+brew tap kennykankush/unifai https://github.com/kennykankush/unifAI
+brew trust kennykankush/unifai   # newer Homebrew requires this for third-party taps
+brew install --cask unifai
 ```
 
 Update with `brew upgrade --cask unifai`. The cask also links `unifai-mcp` onto your PATH. Releases are built for Apple silicon and need macOS 14 or later.
@@ -40,7 +42,7 @@ Use a Mac with Xcode and Swift installed. This checkout was built with Swift 6.2
 Build the local development app and open it:
 
 ```sh
-git clone https://github.com/kennykankush/Unifai.git
+git clone https://github.com/kennykankush/unifAI.git
 cd Unifai
 bash scripts/build-app.sh
 open ".build/Unifai Dev.app"
@@ -198,7 +200,7 @@ The offline suite currently runs 85 tests, with 8 opt-in checks skipped. `UNIFAI
 
 ## Release
 
-Official releases come from `scripts/release.sh` on the release Mac. It runs the tests, builds an optimized app, signs the app and the embedded `unifai-mcp` with a Developer ID certificate and hardened runtime, notarizes and staples it, tags `v<VERSION>`, uploads the zip to GitHub Releases, and updates the cask in [kennykankush/homebrew-tap](https://github.com/kennykankush/homebrew-tap).
+Official releases come from `scripts/release.sh` on the release Mac. It runs the tests, builds an optimized app, signs the app and the embedded `unifai-mcp` with a Developer ID certificate and hardened runtime, notarizes and staples it, tags `v<VERSION>`, uploads the zip to GitHub Releases, and updates [`Casks/unifai.rb`](Casks/unifai.rb) in this repository, which is its own Homebrew tap.
 
 ```sh
 # once: save notarization credentials (app-specific password from account.apple.com)

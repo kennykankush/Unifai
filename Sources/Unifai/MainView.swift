@@ -721,6 +721,7 @@ struct MainView: View {
         if account.mode == .live { Button("Refresh Balance") { Task { await store.refreshAccount(account.id) } } }
         if SignIn.supports(account.integrationID) { Button(SignIn.title(account.integrationID)) { signIn(account) } }
         Button("Edit Account") { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } }
+        if account.mode == .live { Button("Switch to Manual Records") { perform { try store.switchToManual(account.id) } } }
         Button("Add Payment") { editor = .payment(.init(accountID: account.id, description: "", kind: .topUp, money: Money(0, "USD"), paidAt: .now)) }
         Divider()
         Button("Remove Account", role: .destructive) { removal = .init(title: "Remove \(account.label)?", action: { try store.removeAccount(account.id) }) }
@@ -943,6 +944,12 @@ struct MainView: View {
                 .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                 if let error = account.lastError {
                     InlineNotice(text: error + (account.lastAttempt.map { " Last attempt \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""))
+                    // A key this account can never get (Admin keys need an organization): offer manual records instead.
+                    if error.localizedCaseInsensitiveContains("Admin key") {
+                        Button { perform { try store.switchToManual(account.id) } } label: { Label("Keep as Manual Records", systemImage: "square.and.pencil") }
+                            .buttonStyle(PillButtonStyle(compact: true))
+                            .help("Stops refreshing this wallet and keeps its recorded payments. You can still import receipts and add top-ups.")
+                    }
                 }
             }
             .padding(.horizontal, 6)
