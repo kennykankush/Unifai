@@ -145,8 +145,15 @@ public final class AppStore: ObservableObject {
                 // A real invoice supersedes Unifai's month-end usage estimate for that wallet.
                 if row.kind == .usageCharge, let accountID {
                     let before = next.payments.count
-                    next.payments.removeAll { $0.estimated == true && $0.accountID == accountID && $0.money.currency == row.money.currency
+                    next.payments.removeAll { $0.estimated == true && $0.kind == .usageCharge && $0.accountID == accountID && $0.money.currency == row.money.currency
                         && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 20 * 86400 }
+                    summary.replaced += before - next.payments.count
+                }
+                // A real top-up receipt supersedes a detected top-up for that wallet.
+                if row.kind == .topUp, let accountID {
+                    let before = next.payments.count
+                    next.payments.removeAll { $0.estimated == true && $0.kind == .topUp && $0.accountID == accountID && $0.money.currency == row.money.currency
+                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 7 * 86400 }
                     summary.replaced += before - next.payments.count
                 }
                 // A real receipt supersedes the automatic entry for the same renewal.
@@ -344,8 +351,15 @@ public final class AppStore: ObservableObject {
                 guard let current = next.accounts.firstIndex(where: { $0.id == id }) else { return }
                 let previous = next.accounts[current].snapshot
                 next.accounts[current].snapshot = snapshot; next.accounts[current].lastError = nil
+                let topUps = TopUpWatch.payments(old: previous, new: snapshot, account: next.accounts[current], recorded: next.payments, now: now)
+                next.payments += topUps
                 next.record(AllowanceWatch.events(old: previous, new: snapshot, account: next.accounts[current], now: now)
-                    + Self.anomalyEvents(snapshot, account: next.accounts[current], now: now))
+                    + Self.anomalyEvents(snapshot, account: next.accounts[current], now: now)
+                    + topUps.map { payment in
+                        TimelineEvent(id: "topup-\(payment.id)", date: now, kind: .recorded, title: "\(Catalogue.integration(next.accounts[current].integrationID)?.name ?? "Wallet"): top-up detected",
+                                      detail: "Recorded \(payment.money.plainText) as an Estimate. Import the receipt to replace it, or confirm it in Payments.",
+                                      sourceName: "Unifai", accountID: payment.accountID, important: true)
+                    })
             }
         } catch {
             // Never persist a response body, request headers or credential in errors.

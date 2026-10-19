@@ -115,3 +115,46 @@ public enum PlanAdvisor {
         return nil
     }
 }
+
+/// Spots credit purchases you did not record, from a provider's purchased total rising between two
+/// readings, and records them as Estimates until a receipt replaces them. This keeps "spent this
+/// month" honest when a top-up was never logged.
+public enum TopUpWatch {
+    /// OpenRouter adds a 5.5% fee (0.80 minimum) to card purchases of credits.
+    static func openRouterCharge(credits: Decimal) -> Decimal { (credits + max(Decimal(string: "0.80")!, credits * Decimal(string: "0.055")!)).rounded2 }
+
+    public static func payments(old: BalanceSnapshot?, new: BalanceSnapshot, account: ConnectedAccount, recorded: [PaymentRecord], now: Date = .now) -> [PaymentRecord] {
+        guard let old else { return [] }
+        func detail(_ snapshot: BalanceSnapshot, _ label: String) -> Money? { snapshot.details.first { $0.label == label }?.value }
+        let name = Catalogue.integration(account.integrationID)?.name ?? account.label
+        var found: (credits: Money, charge: Money, description: String)?
+        switch account.integrationID {
+        case "openrouter":
+            // Total credits ever purchased: any rise is a purchase.
+            if let before = detail(old, "Reported credits purchased"), let after = detail(new, "Reported credits purchased"),
+               before.currency == after.currency, after.amount - before.amount >= Decimal(string: "0.5")! {
+                let credits = after.amount - before.amount
+                let charge = openRouterCharge(credits: credits)
+                found = (Money(credits, after.currency), Money(charge, after.currency),
+                         "OpenRouter credits \(Money(credits, after.currency).amountText) + fee (detected)")
+            }
+        case "deepseek":
+            // The purchased balance only rises when you top up; usage in between makes this a lower bound.
+            if let before = detail(old, "Purchased balance"), let after = detail(new, "Purchased balance"),
+               before.currency == after.currency, after.amount - before.amount >= 1 {
+                let credits = after.amount - before.amount
+                found = (Money(credits, after.currency), Money(credits.rounded2, after.currency), "\(name) top-up of at least \(Money(credits, after.currency).amountText) (detected)")
+            }
+        default: break
+        }
+        guard let found else { return [] }
+        // Already logged by hand around now: a top-up for this wallet within three days covering the credits.
+        let logged = recorded.contains { $0.accountID == account.id && $0.kind == .topUp && $0.money.currency == found.charge.currency
+            && abs($0.paidAt.timeIntervalSince(now)) <= 3 * 86400 && $0.money.amount >= found.credits.amount }
+        guard !logged else { return [] }
+        var record = PaymentRecord(accountID: account.id, description: found.description, kind: .topUp, money: found.charge, paidAt: now,
+                                   reference: "DETECTED-\(account.integrationID.uppercased())-\(Int(now.timeIntervalSince1970))")
+        record.estimated = true
+        return [record]
+    }
+}

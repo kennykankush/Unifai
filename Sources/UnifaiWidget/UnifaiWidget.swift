@@ -39,10 +39,12 @@ private struct Container<Content: View>: View {
     let colors: [UInt32]
     let snapshot: WidgetSnapshot?
     @ViewBuilder let content: (WidgetSnapshot) -> Content
+    @Environment(\.widgetRenderingMode) private var mode
     var body: some View {
         Group {
             if let snapshot { content(snapshot) } else { WidgetEmpty() }
         }
+        .environment(\.widgetMono, mode != .fullColor)
         .containerBackground(for: .widget) { WidgetGradient(colors) }
     }
 }

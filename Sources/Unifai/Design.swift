@@ -934,6 +934,12 @@ struct WindowDragArea: NSViewRepresentable {
     final class DragView: NSView {
         override var mouseDownCanMoveWindow: Bool { true }
         override func mouseDown(with event: NSEvent) {
+            // The close, minimise and zoom buttons are moved down into the floating bar, below the
+            // strip AppKit hit-tests for them, so their clicks arrive here. Hand them over.
+            if let button = Self.windowButton(at: event, in: window) {
+                button.mouseDown(with: event)
+                return
+            }
             if event.clickCount == 2 {
                 let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
                 if action == "Minimize" { window?.performMiniaturize(nil) } else if action != "None" { window?.performZoom(nil) }
@@ -944,6 +950,15 @@ struct WindowDragArea: NSViewRepresentable {
     }
     func makeNSView(context: Context) -> DragView { DragView() }
     func updateNSView(_ view: DragView, context: Context) {}
+}
+
+extension WindowDragArea.DragView {
+    static func windowButton(at event: NSEvent, in window: NSWindow?) -> NSButton? {
+        guard let window else { return nil }
+        return [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+            .compactMap { window.standardWindowButton($0) }
+            .first { !$0.isHidden && $0.isEnabled && $0.bounds.insetBy(dx: -2, dy: -2).contains($0.convert(event.locationInWindow, from: nil)) }
+    }
 }
 
 /// Re-centres the close, minimise and zoom buttons in a taller custom header.

@@ -18,17 +18,21 @@ import UnifaiWidgetUI
         }
     }
 
+    /// Writes the full-colour widget and, beside it as -mono, an approximation of the desktop's
+    /// colourless rendering (the system removes the background and drops colour).
     private static func write<Content: View>(frame: CGSize, colors: [UInt32], _ content: Content, to url: URL) {
-        let view = content
-            .padding(16)
-            .frame(width: frame.width, height: frame.height)
-            .background(WidgetGradient(colors))
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .environment(\.colorScheme, .dark)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: url)
+        func render<V: View>(_ view: V, to url: URL) {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            try? png.write(to: url)
+        }
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        render(content.padding(16).frame(width: frame.width, height: frame.height).background(WidgetGradient(colors)).clipShape(shape)
+            .environment(\.colorScheme, .dark), to: url)
+        render(content.environment(\.widgetMono, true).padding(16).frame(width: frame.width, height: frame.height).grayscale(1)
+            .background(Color(white: 0.11)).clipShape(shape).environment(\.colorScheme, .dark),
+               to: url.deletingPathExtension().appendingPathExtension("mono.png"))
     }
 }

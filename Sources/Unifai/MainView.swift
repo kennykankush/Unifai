@@ -754,7 +754,9 @@ struct MainView: View {
                 MoneyText(money: record.money, size: 15, prefix: refund ? "+" : "−")
                     .foregroundStyle(refund ? Palette.positive : Color.primary)
                 HStack(spacing: 6) {
-                    if record.autoRecorded { Chip(text: record.estimated == true ? "Estimate" : "Auto", tint: Palette.accentInk, symbol: "arrow.triangle.2.circlepath").help(record.estimated == true ? "Recorded from the last usage reading of the month. Import the invoice or choose Confirm to mark it as verified." : "Recorded from a subscription schedule. Import the receipt or choose Confirm to mark it as verified.") }
+                    if record.autoRecorded { Chip(text: record.estimated == true ? "Estimate" : "Auto", tint: Palette.accentInk, symbol: "arrow.triangle.2.circlepath").help(record.estimated != true ? "Recorded from a subscription schedule. Import the receipt or choose Confirm to mark it as verified."
+                                     : record.kind == .topUp ? "Detected from the provider's purchased total rising between two readings. Import the receipt to replace it, or edit the amount and confirm it."
+                                     : "Recorded from the last usage reading of the month. Import the invoice or choose Confirm to mark it as verified.") }
                     Text(refund ? "Refunded" : record.kind.rawValue).font(.system(size: 11, weight: .medium)).foregroundStyle(refund ? Palette.positive : .secondary)
                 }
             }

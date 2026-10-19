@@ -71,7 +71,9 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 
 The catalogue separates implemented connectors, manual records and planned capabilities. Planned financial services offer **Add Manual Account**. Planned news sources have no connection action. Claude API, Claude subscriptions, Codex allowances and OpenAI API billing remain separate entries.
 
-Auto renewals and month-end usage estimates stay marked until a receipt confirms them. While any remain, **Payments** shows a **Close the books** banner with an **Unconfirmed** filter. **Copy Receipt Request** copies a prompt for an agent with mail access: it lists each entry and asks for a CSV in the import format. On the first three days of a month, a notification reminds you if last month still has unconfirmed entries.
+Top-ups you forget to log are caught too. When OpenRouter's total of purchased credits rises between two readings, Unifai records the purchase as an **Estimate**, including OpenRouter's 5.5% card fee (0.80 minimum); a rise in DeepSeek's purchased balance is recorded as a lower bound. Importing the receipt replaces the Estimate.
+
+Auto renewals, detected top-ups and month-end usage estimates stay marked until a receipt confirms them. While any remain, **Payments** shows a **Close the books** banner with an **Unconfirmed** filter. **Copy Receipt Request** copies a prompt for an agent with mail access: it lists each entry and asks for a CSV in the import format. On the first three days of a month, a notification reminds you if last month still has unconfirmed entries.
 
 In **Payments**, record settled charges using a positive amount and an ISO currency code such as USD or CNY. Choose **Refund** to reduce the paid total. A receipt reference detects duplicates within the same account. Edit or remove records through their row controls; removals require confirmation.
 
@@ -128,7 +130,7 @@ Unifai has three widgets. To add one, Control-click the desktop, choose **Edit W
 | **AI Spend** | Small, medium | This month's AI and cloud spend with your budget or pay-as-you-go usage. Medium adds the last six months and the next renewal. |
 | **Wallets** | Small, medium, large | Balances, plans and usage limits. Large adds the latest timeline event. |
 
-Click a widget to open Unifai on the matching page. The app writes a small snapshot to a shared container (`~/Library/Group Containers/<Team ID>.dev.unifai`) whenever its data changes. The widget is sandboxed and only reads that file: it has no keys and makes no network requests. Widgets show figures as of the app's last refresh, so keep Unifai running (it can sit in the menu bar) for them to stay current.
+When an app is in front, macOS draws desktop widgets without colour; Unifai's widgets switch to outlines and logo marks so they stay readable. To keep them in colour all the time, set **System Settings > Desktop & Dock > Widget style** to **Full-color**. Click a widget to open Unifai on the matching page. The app writes a small snapshot to a shared container (`~/Library/Group Containers/<Team ID>.dev.unifai`) whenever its data changes. The widget is sandboxed and only reads that file: it has no keys and makes no network requests. Widgets show figures as of the app's last refresh, so keep Unifai running (it can sit in the menu bar) for them to stay current.
 
 ## Let agents read your balances (MCP)
 

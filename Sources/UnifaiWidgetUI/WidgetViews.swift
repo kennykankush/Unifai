@@ -8,6 +8,17 @@ import UnifaiCore
 
 public enum WidgetSize { case small, medium, large }
 
+/// True when macOS draws the widget without colour: on the desktop while an app is in front
+/// (vibrant), or tinted. Solid light fills turn into flat grey blocks then, so the views switch
+/// to outlines and template logos.
+struct WidgetMonoKey: EnvironmentKey { static let defaultValue = false }
+public extension EnvironmentValues {
+    var widgetMono: Bool {
+        get { self[WidgetMonoKey.self] }
+        set { self[WidgetMonoKey.self] = newValue }
+    }
+}
+
 enum WidgetPalette {
     static func hex(_ value: UInt32, _ alpha: Double = 1) -> Color {
         Color(.sRGB, red: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255, blue: Double(value & 0xFF) / 255, opacity: alpha)
@@ -37,7 +48,26 @@ public struct WidgetGradient: View {
 struct Logo: View {
     let name: String?
     var size: CGFloat = 22
+    @Environment(\.widgetMono) private var mono
     var body: some View {
+        if mono {
+            ZStack {
+                Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                // Opaque square logos print as a solid block when drawn as a template; use their outline mark.
+                if let image = Self.image(name == "codex-color" ? "openai" : name) {
+                    Image(nsImage: image).renderingMode(.template).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                        .frame(width: size * 0.56, height: size * 0.56).foregroundStyle(.white)
+                } else {
+                    Image(systemName: "creditcard.fill").font(.system(size: size * 0.4, weight: .bold))
+                }
+            }
+            .frame(width: size, height: size)
+            .widgetAccentable()
+        } else {
+            colour
+        }
+    }
+    private var colour: some View {
         ZStack {
             Circle().fill(Color.white)
             if let image = Self.image(name) {
@@ -61,7 +91,14 @@ struct Logo: View {
 
 struct AppGlyph: View {
     var size: CGFloat = 18
+    @Environment(\.widgetMono) private var mono
     var body: some View {
+        if mono {
+            Image(systemName: "square.stack.3d.up.fill").font(.system(size: size * 0.62, weight: .bold))
+                .frame(width: size, height: size).widgetAccentable()
+        } else { colour }
+    }
+    private var colour: some View {
         Image(systemName: "square.stack.3d.up.fill")
             .font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white)
             .frame(width: size, height: size)
@@ -233,6 +270,7 @@ public struct SpendWidget: View {
 public struct WalletsWidget: View {
     let snapshot: WidgetSnapshot
     let size: WidgetSize
+    @Environment(\.widgetMono) private var mono
     public init(snapshot: WidgetSnapshot, size: WidgetSize) { self.snapshot = snapshot; self.size = size }
     public static let colors = WidgetPalette.dark
 
@@ -337,8 +375,9 @@ public struct WalletsWidget: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, minHeight: tall ? 92 : 58, maxHeight: tall ? 92 : 58, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(LinearGradient(colors: wallet.colors.prefix(2).map { WidgetPalette.hex($0) }, startPoint: .topLeading, endPoint: .bottomTrailing)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.14)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(mono ? AnyShapeStyle(Color.white.opacity(0.09)) : AnyShapeStyle(LinearGradient(colors: wallet.colors.prefix(2).map { WidgetPalette.hex($0) }, startPoint: .topLeading, endPoint: .bottomTrailing))))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(mono ? 0.2 : 0.14)))
     }
 }
 

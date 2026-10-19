@@ -341,3 +341,61 @@ final class LiveStatusTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class TopUpDetectionTests: XCTestCase {
+    private let source = URL(string: "https://example.invalid")!
+
+    private func openRouter(purchased: Decimal, remaining: Decimal, at now: Date) -> BalanceSnapshot {
+        BalanceSnapshot(balances: [Money(remaining, "USD")], details: [BalanceDetail("Reported credits purchased", Money(purchased, "USD"))],
+                        observedAt: now, source: source, coverage: "Synthetic")
+    }
+
+    func testOpenRouterPurchaseIsRecordedOnceWithFeeAndAReceiptReplacesIt() async throws {
+        var purchased: Decimal = 10
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let store = AppStore(repository: StateRepository(directory: root.appendingPathComponent(".build/test-data/\(UUID().uuidString)")), vault: MemoryVault(),
+                             balances: { [self] _, _, now in openRouter(purchased: purchased, remaining: 5, at: now) })
+        try store.addAccount(integrationID: "openrouter", label: "Dev", billingScope: "dev", mode: .live, credential: "k")
+        let id = store.state.accounts[0].id
+        let now = Date()
+        await store.refreshAccount(id, now: now)
+        XCTAssertTrue(store.state.payments.isEmpty, "The first reading has nothing to compare")
+        purchased = 30
+        await store.refreshAccount(id, now: now.addingTimeInterval(120))
+        await store.refreshAccount(id, now: now.addingTimeInterval(240))
+        XCTAssertEqual(store.state.payments.count, 1)
+        let detected = store.state.payments[0]
+        XCTAssertEqual(detected.money, Money(Decimal(string: "21.10")!, "USD"), "20.00 credits plus OpenRouter's 5.5% fee (0.80 minimum)")
+        XCTAssertEqual(detected.kind, .topUp)
+        XCTAssertTrue(detected.autoRecorded)
+        XCTAssertEqual(store.state.events?.filter { $0.kind == .recorded }.count, 1)
+
+        let day = RateTable.dayFormatter.string(from: now)
+        let receipt = "date,description,amount,currency,kind,account,reference\n\(day),OpenRouter credits,21.10,USD,top-up,openrouter,OR-1"
+        let summary = try store.importPayments(try PaymentImport.parse(receipt), now: now.addingTimeInterval(300))
+        XCTAssertEqual(summary.replaced, 1)
+        XCTAssertEqual(store.state.payments.map(\.reference), ["OR-1"])
+    }
+
+    func testAManuallyLoggedTopUpIsNotCountedTwice() {
+        let account = ConnectedAccount(integrationID: "openrouter", label: "Dev", mode: .live)
+        let now = Date()
+        let manual = PaymentRecord(accountID: account.id, description: "OpenRouter", kind: .topUp, money: Money(Decimal(string: "10.80")!, "USD"), paidAt: now.addingTimeInterval(-86400))
+        XCTAssertTrue(TopUpWatch.payments(old: openRouter(purchased: 0, remaining: 0, at: now), new: openRouter(purchased: 10, remaining: 10, at: now),
+                                          account: account, recorded: [manual], now: now).isEmpty)
+        XCTAssertEqual(TopUpWatch.payments(old: openRouter(purchased: 0, remaining: 0, at: now), new: openRouter(purchased: 10, remaining: 10, at: now),
+                                           account: account, recorded: [], now: now).first?.money, Money(Decimal(string: "10.80")!, "USD"))
+    }
+
+    func testDeepSeekBalanceRiseIsALowerBoundEstimate() {
+        let account = ConnectedAccount(integrationID: "deepseek", label: "Dev", mode: .live)
+        let now = Date()
+        func reading(_ purchased: Decimal) -> BalanceSnapshot {
+            BalanceSnapshot(balances: [Money(purchased, "USD")], details: [BalanceDetail("Purchased balance", Money(purchased, "USD"))], observedAt: now, source: source, coverage: "Synthetic")
+        }
+        XCTAssertEqual(TopUpWatch.payments(old: reading(3.43), new: reading(13.2), account: account, recorded: [], now: now).first?.money.amount, Decimal(string: "9.77"))
+        XCTAssertTrue(TopUpWatch.payments(old: reading(3.43), new: reading(3.9), account: account, recorded: [], now: now).isEmpty, "Under 1.00 is noise")
+        XCTAssertTrue(TopUpWatch.payments(old: reading(13), new: reading(3), account: account, recorded: [], now: now).isEmpty, "Usage lowers it")
+    }
+}

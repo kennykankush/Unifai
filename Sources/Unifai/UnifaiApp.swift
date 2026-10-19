@@ -117,12 +117,13 @@ struct MainWindowCommands: Commands {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Unifai" }) ?? NSApp.windows.first(where: \.isVisible) else { return }
             let point = NSPoint(x: parts[0], y: window.frame.height - parts[1])
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
-                    window.sendEvent(event)
-                }
+            func event(_ type: NSEvent.EventType) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
             }
+            // Queue the mouse-up first: AppKit controls track the press in a loop that reads it from the queue.
+            if let up = event(.leftMouseUp) { NSApp.postEvent(up, atStart: false) }
+            if let down = event(.leftMouseDown) { window.sendEvent(down) }
         }
     }
     static var showCompanion: (() -> Void)?
