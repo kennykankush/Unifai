@@ -49,6 +49,7 @@ struct MainView: View {
     @State private var chartCurrency = ""
     @State private var chartMode = "Cumulative"
     @State private var copiedSetup = false
+    @State private var signingIn: Set<UUID> = []
     @FocusState private var searchFocused: Bool
     @State private var searchActive = false
     @Namespace private var navNamespace
@@ -544,8 +545,25 @@ struct MainView: View {
         .buttonStyle(.plain)
     }
 
+    private func signIn(_ account: ConnectedAccount) {
+        signingIn.insert(account.id)
+        Task {
+            do {
+                try await SignIn.start(account.integrationID)
+                if account.integrationID == "codex" {
+                    signingIn.remove(account.id)
+                    await store.refreshAccount(account.id)
+                } else {
+                    store.notice = "Finish signing in to Claude in the Terminal window, then click Refresh on this wallet."
+                }
+            } catch { store.notice = error.localizedDescription }
+            signingIn.remove(account.id)
+        }
+    }
+
     @ViewBuilder private func walletMenuItems(_ account: ConnectedAccount) -> some View {
         if account.mode == .live { Button("Refresh Balance") { Task { await store.refreshAccount(account.id) } } }
+        if SignIn.supports(account.integrationID) { Button(SignIn.title(account.integrationID)) { signIn(account) } }
         Button("Edit Account") { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } }
         Button("Add Payment") { editor = .payment(.init(accountID: account.id, description: "", kind: .topUp, money: Money(0, "USD"), paidAt: .now)) }
         Divider()
@@ -681,15 +699,51 @@ struct MainView: View {
                         .disabled(store.refreshingAccounts.contains(account.id) || store.loadFailure != nil)
                         .accessibilityLabel("Refresh \(account.label) \(integrationName(account))")
                     }
+                    if SignIn.supports(account.integrationID) {
+                        Button { signIn(account) } label: {
+                            HStack(spacing: 6) {
+                                if signingIn.contains(account.id) { ProgressView().controlSize(.mini) } else { Image(systemName: "person.crop.circle.badge.checkmark") }
+                                Text("Sign In")
+                            }
+                        }
+                        .buttonStyle(PillButtonStyle(compact: true))
+                        .disabled(signingIn.contains(account.id))
+                        .help(SignIn.title(account.integrationID))
+                    }
                     Button { if let integration = Catalogue.integration(account.integrationID) { editor = .account(integration, account) } } label: { Label("Edit", systemImage: "pencil") }
                         .buttonStyle(PillButtonStyle(compact: true))
                     Spacer()
                     moreMenu("Options for \(account.label)") { walletMenuItems(account) }
                 }
+                if let windows = account.snapshot?.allowances, !windows.isEmpty {
+                    VStack(spacing: 10) {
+                        ForEach(windows) { window in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(window.name).font(.system(size: 12, weight: .semibold))
+                                    Spacer()
+                                    Text("\(window.usedPercent)% used").font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                                        .foregroundStyle(window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : Color.primary)
+                                }
+                                UsageMeter(used: Double(window.usedPercent) / 100,
+                                           tint: window.usedPercent >= 100 ? Palette.negative : window.usedPercent >= 80 ? Palette.warning : Palette.series(account.integrationID),
+                                           track: Palette.raised)
+                                if let reset = window.resetsAt {
+                                    Text("Resets \(reset.formatted(.relative(presentation: .named))) · \(reset.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
                 if let snapshot = account.snapshot {
-                    let rows = snapshot.details.map { ($0.label, $0.value) } + snapshot.reportedConsumption.map { ("Reported consumption", $0) }
+                    let period = snapshot.consumptionPeriod.map { " (\($0.lowercased()))" } ?? ""
+                    let detailRows = snapshot.details.map { ($0.label, $0.value) } + snapshot.reportedConsumption.map { ("Reported consumption\(period)", $0) }
+                    if let plan = snapshot.plan {
+                        HStack { Text("Plan").foregroundStyle(.secondary); Spacer(); Text(plan).font(.system(size: 12, weight: .semibold)) }.font(.system(size: 12))
+                    }
                     VStack(spacing: 8) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        ForEach(Array(detailRows.enumerated()), id: \.offset) { _, row in
                             HStack {
                                 Text(row.0).foregroundStyle(.secondary)
                                 Spacer()

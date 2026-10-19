@@ -11,6 +11,14 @@ public enum AgentReport {
         init(_ money: Money) { amount = "\(money.amount)"; currency = money.currency }
     }
 
+    public struct Allowance: Codable, Equatable {
+        public var name: String
+        public var usedPercent: Int
+        public var remainingPercent: Int
+        public var windowMinutes: Int?
+        public var resetsAt: Date?
+    }
+
     public struct Balance: Codable, Equatable {
         public var accountID: String
         public var provider: String
@@ -27,6 +35,10 @@ public enum AgentReport {
         public var coverage: String?
         public var source: String?
         public var note: String?
+        public var plan: String?
+        public var usageWindows: [Allowance]?
+        public var limitReached: Bool?
+        public var consumptionPeriod: String?
     }
 
     public struct Payment: Codable, Equatable {
@@ -101,7 +113,13 @@ public enum AgentReport {
                 lastError: account.lastError,
                 coverage: snapshot?.coverage,
                 source: snapshot?.source.absoluteString,
-                note: note)
+                note: note,
+                plan: snapshot?.plan,
+                usageWindows: snapshot?.allowances?.map {
+                    Allowance(name: $0.name, usedPercent: $0.usedPercent, remainingPercent: 100 - $0.usedPercent, windowMinutes: $0.windowMinutes, resetsAt: $0.resetsAt)
+                },
+                limitReached: snapshot?.limitReached,
+                consumptionPeriod: snapshot?.consumptionPeriod)
         }
     }
 

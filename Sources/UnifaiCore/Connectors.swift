@@ -29,11 +29,18 @@ public struct BalanceClient {
         return URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
     }
     public func fetch(integrationID: String, credential: String, now: Date = .now) async throws -> BalanceSnapshot {
+        if integrationID == "codex" { return try await CodexClient().fetch(now: now) }
+        if integrationID == "claude-subscription" { return try await ClaudeCodeClient().fetch(now: now) }
         guard !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ConnectorError.missingCredential }
         let endpoint: String
         switch integrationID {
         case "openrouter": endpoint = "https://openrouter.ai/api/v1/credits"
         case "deepseek": endpoint = "https://api.deepseek.com/user/balance"
+        case "openai-api":
+            // Costs for the last 30 full and partial UTC days, one bucket per day.
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "UTC")!
+            let start = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: now))!
+            endpoint = "https://api.openai.com/v1/organization/costs?start_time=\(Int(start.timeIntervalSince1970))&bucket_width=1d&limit=31"
         default: throw ValidationError.message("This service does not have a live balance connector yet.")
         }
         let url = URL(string: endpoint)!
@@ -45,6 +52,8 @@ public struct BalanceClient {
         guard let response = response as? HTTPURLResponse else { throw ConnectorError.invalidResponse }
         switch response.statusCode {
         case 200..<300: break
+        case 401 where integrationID == "openai-api", 403 where integrationID == "openai-api":
+            throw ValidationError.message("OpenAI refused the key. The Costs API needs an organization Admin key (sk-admin-...) from platform.openai.com > Settings > Organization > Admin keys.")
         case 401, 403: throw ConnectorError.authorization
         case 429: throw ConnectorError.rateLimited
         default: throw ConnectorError.unavailable(response.statusCode)
@@ -53,6 +62,29 @@ public struct BalanceClient {
     }
     public static func decode(integrationID: String, data: Data, source: URL, now: Date = .now) throws -> BalanceSnapshot {
         do {
+            if integrationID == "openai-api" {
+                let body = try JSONDecoder().decode(OpenAICostsPage.self, from: data)
+                var totals: [String: Decimal] = [:]
+                var today: [String: Decimal] = [:]
+                let todayStart = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+                for bucket in body.data {
+                    for result in bucket.results {
+                        guard let amount = result.amount, amount.value.isFinite, amount.value >= 0 else { continue }
+                        let currency = amount.currency.uppercased()
+                        guard Money.validCurrency(currency) else { throw ConnectorError.invalidResponse }
+                        let value = Decimal(string: String(amount.value)) ?? Decimal(amount.value)
+                        totals[currency, default: 0] += value
+                        if bucket.end_time > todayStart { today[currency, default: 0] += value }
+                    }
+                }
+                if totals.isEmpty { totals["USD"] = 0 }
+                let consumption = totals.keys.sorted().map { Money(totals[$0]!, $0) }
+                let details = today.keys.sorted().map { BalanceDetail("Latest day", Money(today[$0]!, $0)) }
+                return BalanceSnapshot(balances: [], details: details, reportedConsumption: consumption, observedAt: now,
+                                       source: URL(string: "https://platform.openai.com/docs/api-reference/usage/costs")!,
+                                       coverage: "OpenAI Costs API totals for the last 30 days, grouped by UTC day. Costs can be reported with a delay and exclude ChatGPT subscriptions. OpenAI offers no prepaid balance endpoint.",
+                                       consumptionPeriod: "Last 30 days")
+            }
             if integrationID == "openrouter" {
                 let body = try JSONDecoder().decode(OpenRouterResponse.self, from: data).data
                 guard !body.total_credits.isNaN, !body.total_usage.isNaN,
@@ -161,5 +193,231 @@ public struct GitHubClient {
     private struct ReleaseResponse: Decodable {
         let id: Int; let name: String?; let tag_name: String; let html_url: URL
         let published_at: Date?; let prerelease: Bool; let draft: Bool
+    }
+}
+
+struct OpenAICostsPage: Decodable {
+    struct Bucket: Decodable {
+        let start_time: Int
+        let end_time: Int
+        let results: [Result]
+    }
+    struct Result: Decodable { let amount: Amount? }
+    struct Amount: Decodable { let value: Double; let currency: String }
+    let data: [Bucket]
+}
+
+/// Finds command-line tools in common install locations. GUI apps do not inherit the login shell's PATH.
+public enum LocalTool {
+    public static func locate(_ name: String, extra: [String] = []) -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)", "\(home)/.local/bin/\(name)", "\(home)/.npm-global/bin/\(name)",
+                          "\(home)/.bun/bin/\(name)", "\(home)/.volta/bin/\(name)"] + extra
+        return candidates.lazy.map { URL(fileURLWithPath: $0) }.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+    static func environment(for tool: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = [tool.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", environment["PATH"] ?? ""].joined(separator: ":")
+        return environment
+    }
+}
+
+/// A short-lived `codex app-server` process speaking its JSON-RPC protocol over stdio.
+final class CodexSession {
+    private let process = Process()
+    private let input = Pipe()
+    private let output = Pipe()
+    private var buffer = Data()
+
+    init(codex: URL) throws {
+        process.executableURL = codex
+        process.arguments = ["app-server"]
+        process.environment = LocalTool.environment(for: codex)
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        try process.run()
+        _ = try request(id: 0, method: "initialize", params: ["clientInfo": ["name": "unifai", "title": "Unifai", "version": "1"]], timeout: 25)
+        try send(["method": "initialized"])
+    }
+    deinit { if process.isRunning { process.terminate() } }
+
+    private func send(_ object: [String: Any]) throws {
+        var data = try JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        try input.fileHandleForWriting.write(contentsOf: data)
+    }
+
+    /// Reads messages until one matches, discarding others.
+    private func next(until deadline: Date, matching: ([String: Any]) -> Bool) throws -> [String: Any] {
+        while Date() < deadline {
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = buffer[buffer.startIndex..<newline]
+                buffer.removeSubrange(buffer.startIndex...newline)
+                if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any], matching(object) { return object }
+            }
+            let chunk = output.fileHandleForReading.availableData
+            if chunk.isEmpty { if !process.isRunning { break }; Thread.sleep(forTimeInterval: 0.05) } else { buffer.append(chunk) }
+        }
+        throw ValidationError.message("Codex did not answer in time. Check that codex runs in Terminal, then try again.")
+    }
+
+    func request(id: Int, method: String, params: [String: Any]? = nil, timeout: TimeInterval = 25) throws -> Data {
+        var message: [String: Any] = ["id": id, "method": method]
+        if let params { message["params"] = params }
+        try send(message)
+        let reply = try next(until: Date().addingTimeInterval(timeout)) { $0["id"] as? Int == id }
+        if let error = reply["error"] as? [String: Any] {
+            throw ValidationError.message("Codex returned an error: \(error["message"] as? String ?? "unknown"). Sign in again, then refresh.")
+        }
+        return try JSONSerialization.data(withJSONObject: reply["result"] ?? [:])
+    }
+
+    func notification(_ method: String, timeout: TimeInterval) throws -> [String: Any] {
+        let message = try next(until: Date().addingTimeInterval(timeout)) { $0["method"] as? String == method && $0["id"] == nil }
+        return message["params"] as? [String: Any] ?? [:]
+    }
+}
+
+/// Reads the ChatGPT plan and Codex usage limits through the Codex CLI's app-server protocol.
+/// Codex owns the sign-in; Unifai never sees or stores an OpenAI credential.
+public struct CodexClient {
+    public init() {}
+    public static let source = URL(string: "https://developers.openai.com/codex/app-server")!
+    public static func locate() -> URL? { LocalTool.locate("codex", extra: ["/Applications/Codex.app/Contents/Resources/codex"]) }
+    static let notInstalled = ValidationError.message("Codex is not installed. Install it with brew install codex, then sign in.")
+
+    public func fetch(now: Date = .now) async throws -> BalanceSnapshot {
+        guard let codex = Self.locate() else { throw Self.notInstalled }
+        let (account, limits) = try await Task.detached { () throws -> (Data, Data) in
+            let session = try CodexSession(codex: codex)
+            let account = try session.request(id: 1, method: "account/read", params: ["refreshToken": false])
+            let limits = try session.request(id: 2, method: "account/rateLimits/read")
+            return (account, limits)
+        }.value
+        return try Self.decode(account: account, limits: limits, now: now)
+    }
+
+    /// Runs Codex's own ChatGPT sign-in: Codex returns a browser URL and hosts the callback,
+    /// then reports completion. The resulting login is stored by Codex, not by Unifai.
+    public func signIn(openURL: @escaping @Sendable (URL) -> Void, timeout: TimeInterval = 600) async throws {
+        guard let codex = Self.locate() else { throw Self.notInstalled }
+        try await Task.detached {
+            let session = try CodexSession(codex: codex)
+            let started = try JSONSerialization.jsonObject(with: session.request(id: 1, method: "account/login/start", params: ["type": "chatgpt"])) as? [String: Any]
+            guard let link = started?["authUrl"] as? String, let url = URL(string: link), url.scheme == "https" else {
+                throw ValidationError.message("Codex did not return a sign-in link.")
+            }
+            openURL(url)
+            let result = try session.notification("account/login/completed", timeout: timeout)
+            guard result["success"] as? Bool == true else {
+                throw ValidationError.message("ChatGPT sign-in did not finish\((result["error"] as? String).map { ": \($0)" } ?? ".")")
+            }
+        }.value
+    }
+
+    struct AccountResult: Decodable {
+        struct Account: Decodable { let type: String; let planType: String? }
+        let account: Account?
+    }
+    struct LimitsResult: Decodable {
+        struct Window: Decodable { let usedPercent: Int; let windowDurationMins: Int?; let resetsAt: Int? }
+        struct Credits: Decodable { let hasCredits: Bool; let unlimited: Bool; let balance: String? }
+        struct Snapshot: Decodable { let planType: String?; let primary: Window?; let secondary: Window?; let credits: Credits?; let rateLimitReachedType: String? }
+        let rateLimits: Snapshot
+    }
+
+    public static func decode(account accountData: Data, limits limitsData: Data, now: Date = .now) throws -> BalanceSnapshot {
+        let account = try JSONDecoder().decode(AccountResult.self, from: accountData).account
+        guard let account else { throw ValidationError.message("Codex is not signed in. Run codex login, then refresh.") }
+        guard account.type == "chatgpt" else {
+            throw ValidationError.message("Codex is signed in with an API key, which has no ChatGPT plan or Codex limits. Sign in with ChatGPT using codex login.")
+        }
+        let limits: LimitsResult.Snapshot
+        do { limits = try JSONDecoder().decode(LimitsResult.self, from: limitsData).rateLimits }
+        catch { throw ConnectorError.invalidResponse }
+        let windows = [limits.primary, limits.secondary].compactMap { $0 }.map { window in
+            AllowanceWindow(name: AllowanceWindow.name(forMinutes: window.windowDurationMins), usedPercent: max(0, min(100, window.usedPercent)),
+                            windowMinutes: window.windowDurationMins, resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) })
+        }
+        var balances: [Money] = []
+        var details: [BalanceDetail] = []
+        if let credits = limits.credits, credits.hasCredits, !credits.unlimited, let text = credits.balance,
+           let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")), !value.isNaN, value >= 0 {
+            balances.append(Money(value, "CREDITS"))
+        }
+        if limits.credits?.unlimited == true { details.append(BalanceDetail("Codex credits", Money(0, "UNLIMITED"))) }
+        let plan = (account.planType ?? limits.planType).map(Self.planName)
+        return BalanceSnapshot(balances: balances, details: details, observedAt: now, source: source,
+                               coverage: "Read through the Codex app on this Mac using its ChatGPT sign-in. Percentages and reset times are reported by OpenAI. Subscription payments are not included.",
+                               plan: plan, allowances: windows, limitReached: limits.rateLimitReachedType != nil)
+    }
+
+    static func planName(_ raw: String) -> String {
+        switch raw {
+        case "plus": return "ChatGPT Plus"
+        case "pro": return "ChatGPT Pro"
+        case "prolite": return "ChatGPT Pro Lite"
+        case "promax": return "ChatGPT Pro Max"
+        case "go": return "ChatGPT Go"
+        case "free": return "ChatGPT Free"
+        case "team": return "ChatGPT Team"
+        case "business", "self_serve_business_prolite", "self_serve_business_usage_based": return "ChatGPT Business"
+        case "edu", "edu_plus", "edu_pro": return "ChatGPT Edu"
+        case "unknown": return "ChatGPT"
+        default: return raw.hasPrefix("enterprise") || raw == "ent26" ? "ChatGPT Enterprise" : "ChatGPT \(raw.capitalized)"
+        }
+    }
+}
+
+/// Reads the Claude subscription plan from Claude Code's own status command (`claude auth status --json`).
+/// Anthropic offers no public interface for subscription usage limits, so none are read; Claude Code's
+/// stored token is never opened.
+public struct ClaudeCodeClient {
+    public init() {}
+    public static let source = URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")!
+    public static func locate() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return LocalTool.locate("claude", extra: ["\(home)/.claude/local/claude"])
+    }
+
+    public func fetch(now: Date = .now) async throws -> BalanceSnapshot {
+        guard let claude = Self.locate() else {
+            throw ValidationError.message("Claude Code is not installed. Install it from claude.com/claude-code, then sign in.")
+        }
+        let data = try await Task.detached { try Self.run(claude, ["auth", "status", "--json"]) }.value
+        return try Self.decode(data, now: now)
+    }
+
+    static func run(_ tool: URL, _ arguments: [String], timeout: TimeInterval = 20) throws -> Data {
+        let process = Process(), output = Pipe()
+        process.executableURL = tool; process.arguments = arguments
+        process.environment = LocalTool.environment(for: tool)
+        process.standardOutput = output; process.standardError = FileHandle.nullDevice; process.standardInput = FileHandle.nullDevice
+        try process.run()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        if process.isRunning { process.terminate(); throw ValidationError.message("Claude Code did not answer in time.") }
+        return output.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    struct Status: Decodable { let loggedIn: Bool; let authMethod: String?; let subscriptionType: String? }
+
+    public static func decode(_ data: Data, now: Date = .now) throws -> BalanceSnapshot {
+        guard let status = try? JSONDecoder().decode(Status.self, from: data) else { throw ConnectorError.invalidResponse }
+        guard status.loggedIn else { throw ValidationError.message("Claude Code is not signed in. Use Sign in with Claude, then refresh.") }
+        guard status.authMethod == "claude.ai" else {
+            throw ValidationError.message("Claude Code is using an API key rather than a Claude subscription. Sign in with your Claude account to read the plan.")
+        }
+        let plan: String
+        switch status.subscriptionType?.lowercased() {
+        case "max": plan = "Claude Max"
+        case "pro": plan = "Claude Pro"
+        case "team": plan = "Claude Team"
+        case "enterprise": plan = "Claude Enterprise"
+        case let other?: plan = "Claude \(other.capitalized)"
+        case nil: plan = "Claude"
+        }
+        return BalanceSnapshot(balances: [], observedAt: now, source: source,
+                               coverage: "Plan read from Claude Code on this Mac (claude auth status). Anthropic does not offer subscription usage limits to other apps; run /usage in Claude Code to see them.",
+                               plan: plan)
     }
 }

@@ -36,6 +36,28 @@ public struct BalanceDetail: Codable, Hashable {
     public init(_ label: String, _ value: Money) { self.label = label; self.value = value }
 }
 
+/// A usage allowance that resets on a schedule, such as Codex's 5-hour and weekly windows.
+public struct AllowanceWindow: Codable, Hashable, Identifiable {
+    public var name: String
+    public var usedPercent: Int
+    public var windowMinutes: Int?
+    public var resetsAt: Date?
+    public var id: String { name }
+    public init(name: String, usedPercent: Int, windowMinutes: Int? = nil, resetsAt: Date? = nil) {
+        self.name = name; self.usedPercent = usedPercent; self.windowMinutes = windowMinutes; self.resetsAt = resetsAt
+    }
+    public static func name(forMinutes minutes: Int?) -> String {
+        switch minutes {
+        case 300: return "5-hour window"
+        case 10080: return "Weekly window"
+        case let value? where value % 1440 == 0: return "\(value / 1440)-day window"
+        case let value? where value % 60 == 0: return "\(value / 60)-hour window"
+        case let value?: return "\(value)-minute window"
+        default: return "Usage window"
+        }
+    }
+}
+
 public struct BalanceSnapshot: Codable, Hashable {
     public var balances: [Money]
     public var details: [BalanceDetail]
@@ -43,9 +65,16 @@ public struct BalanceSnapshot: Codable, Hashable {
     public var observedAt: Date
     public var source: URL
     public var coverage: String
-    public init(balances: [Money], details: [BalanceDetail] = [], reportedConsumption: [Money] = [], observedAt: Date = .now, source: URL, coverage: String) {
+    // Optional additions keep earlier schema-1 snapshots readable.
+    public var plan: String?
+    public var allowances: [AllowanceWindow]?
+    public var limitReached: Bool?
+    public var consumptionPeriod: String?
+    public init(balances: [Money], details: [BalanceDetail] = [], reportedConsumption: [Money] = [], observedAt: Date = .now, source: URL, coverage: String,
+                plan: String? = nil, allowances: [AllowanceWindow]? = nil, limitReached: Bool? = nil, consumptionPeriod: String? = nil) {
         self.balances = balances; self.details = details; self.reportedConsumption = reportedConsumption
         self.observedAt = observedAt; self.source = source; self.coverage = coverage
+        self.plan = plan; self.allowances = allowances; self.limitReached = limitReached; self.consumptionPeriod = consumptionPeriod
     }
     public func isStale(at date: Date = .now) -> Bool { date.timeIntervalSince(observedAt) > 3600 }
 }

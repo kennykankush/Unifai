@@ -18,6 +18,8 @@ public struct Integration: Identifiable {
     public var capabilities: String
     public var limitation: String
     public var source: URL?
+    /// Codex and Claude Code sign in through their own apps, so Unifai stores no credential for them.
+    public var needsCredential: Bool { id != "codex" && id != "claude-subscription" }
     public var symbol: String {
         switch category {
         case .providers: return "cpu"
@@ -40,18 +42,18 @@ public enum Catalogue {
             .init(id: "claude-api", name: "Claude API / Console", category: .providers, status: .planned, evidence: .documented,
                   method: "Eligible organization Admin API credential", capabilities: "Planned: organization usage and period costs",
                   limitation: "API organization billing is separate from a Claude subscription. Reporting can be delayed and excludes some charges. Manual payment records are available.", source: URL(string: "https://platform.claude.com/docs/en/manage-claude/usage-cost-api")),
-            .init(id: "openai-api", name: "OpenAI API Platform", category: .providers, status: .planned, evidence: .documented,
-                  method: "Organization reporting credential", capabilities: "Planned: organization usage and costs",
-                  limitation: "API costs do not establish ChatGPT subscription payments or a universal prepaid balance. Manual records are available.", source: URL(string: "https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs")),
-            .init(id: "claude-subscription", name: "Claude subscription / Code", category: .subscriptions, status: .manual, evidence: .reference,
-                  method: "Confirmed payments and renewal schedule", capabilities: "Record subscription payments and expected renewals",
-                  limitation: "Automatic usage and reset tracking are planned. Existing third-party session routes need a separate permission and reliability review.", source: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/claude.md")),
-            .init(id: "codex", name: "Codex account", category: .subscriptions, status: .planned, evidence: .documented,
-                  method: "Planned: opt-in local app-server connection", capabilities: "Planned: allowance windows and reset timestamps",
-                  limitation: "Official account/rateLimits/read is documented. No local session is read in this build. Record a shared ChatGPT subscription once.", source: URL(string: "https://learn.chatgpt.com/docs/app-server")),
+            .init(id: "openai-api", name: "OpenAI API Platform", category: .providers, status: .ready, evidence: .documented,
+                  method: "Organization Admin key · read-only costs", capabilities: "API spend per currency for the last 30 days, from the Costs API",
+                  limitation: "Requires an organization Admin key, which has broad access; Unifai only sends GET /v1/organization/costs. API costs do not include ChatGPT subscription payments, and OpenAI offers no prepaid balance endpoint.", source: URL(string: "https://platform.openai.com/docs/api-reference/usage/costs")),
+            .init(id: "claude-subscription", name: "Claude subscription / Code", category: .subscriptions, status: .ready, evidence: .documented,
+                  method: "Local Claude Code app · your existing Claude sign-in", capabilities: "Claude plan (Pro, Max, Team) and sign-in status; record payments and renewals",
+                  limitation: "Reads claude auth status from Claude Code on this Mac. Anthropic offers no public interface for subscription usage limits, so those stay in Claude Code's /usage; Claude Code's stored token is never read.", source: URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")),
+            .init(id: "codex", name: "ChatGPT & Codex", category: .subscriptions, status: .ready, evidence: .documented,
+                  method: "Local Codex app · your existing Codex sign-in", capabilities: "ChatGPT plan, Codex 5-hour and weekly limits with reset times, and Codex credits",
+                  limitation: "Reads through the Codex CLI on this Mac (codex app-server), so install Codex and run codex login first. Unifai stores no OpenAI credential. Subscription payments still need manual records.", source: URL(string: "https://developers.openai.com/codex/app-server")),
             .init(id: "chatgpt", name: "ChatGPT subscription", category: .subscriptions, status: .manual, evidence: .unverified,
                   method: "Confirmed payments and renewal schedule", capabilities: "Record payments, refunds and expected renewal",
-                  limitation: "Consumer billing automation is unverified. A plan shared with Codex is a single subscription expense.", source: nil),
+                  limitation: "OpenAI offers no API for consumer billing, so record payments here. For your live plan and Codex limits, connect ChatGPT & Codex. A plan shared with Codex is a single subscription expense.", source: nil),
             .init(id: "cursor", name: "Cursor", category: .subscriptions, status: .manual, evidence: .partial,
                   method: "Manual personal records; team API planned", capabilities: "Record payments and expected renewal",
                   limitation: "A team Admin API is documented. Personal billing and allowance access have not been established.", source: URL(string: "https://prod.cursor.com/docs/account/teams/admin-api")),

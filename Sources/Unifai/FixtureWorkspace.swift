@@ -38,11 +38,40 @@ enum FixtureWorkspace {
             try store.saveSubscription(.init(accountID: store.state.accounts[3].id, name: "ChatGPT", price: Money(20, "USD"), cadence: .monthly, nextRenewal: .now.addingTimeInterval(86400 * 25)))
             try store.addRepository("example/ai-hub", includePrereleases: false)
         }
+        // Added separately so existing synthetic workspaces gain the OpenAI connectors too.
+        if !store.state.accounts.contains(where: { $0.integrationID == "codex" }) {
+            try store.addAccount(integrationID: "codex", label: "Personal", billingScope: "ChatGPT Plus", mode: .live)
+        }
+        if !store.state.accounts.contains(where: { $0.integrationID == "claude-subscription" }) {
+            try store.addAccount(integrationID: "claude-subscription", label: "Personal", billingScope: "Claude subscription", mode: .live)
+        }
+        if !store.state.accounts.contains(where: { $0.integrationID == "openai-api" }) {
+            try store.addAccount(integrationID: "openai-api", label: "Side projects", billingScope: "Synthetic organization", mode: .live, credential: "fixture-valid")
+        }
         for account in store.state.accounts where account.mode == .live { try vault.write("fixture-valid", accountID: account.id) }
     }
     static func balance(_ integration: String, _ credential: String, _ now: Date) async throws -> BalanceSnapshot {
         if credential == "fixture-unauthorized" { throw ConnectorError.authorization }
         if credential == "fixture-offline" { throw URLError(.notConnectedToInternet) }
+        if integration == "codex" {
+            let account = Data(#"{"account":{"type":"chatgpt","email":null,"planType":"plus"},"requiresOpenaiAuth":true}"#.utf8)
+            let fiveHour = Int(now.addingTimeInterval(3 * 3600 + 1200).timeIntervalSince1970), weekly = Int(now.addingTimeInterval(3 * 86400 + 7200).timeIntervalSince1970)
+            let limits = Data("{\"rateLimits\":{\"limitId\":\"codex\",\"planType\":\"plus\",\"primary\":{\"usedPercent\":42,\"windowDurationMins\":300,\"resetsAt\":\(fiveHour)},\"secondary\":{\"usedPercent\":68,\"windowDurationMins\":10080,\"resetsAt\":\(weekly)},\"credits\":{\"hasCredits\":true,\"unlimited\":false,\"balance\":\"120.50\"}}}".utf8)
+            return try CodexClient.decode(account: account, limits: limits, now: now)
+        }
+        if integration == "claude-subscription" {
+            return try ClaudeCodeClient.decode(Data(#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}"#.utf8), now: now)
+        }
+        if integration == "openai-api" {
+            let today = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+            let buckets = (0..<30).map { day -> String in
+                let start = today - (29 - day) * 86400
+                let value = day % 3 == 0 ? 0 : [0.42, 1.18, 0.73, 2.05, 0.31][day % 5]
+                return "{\"object\":\"bucket\",\"start_time\":\(start),\"end_time\":\(start + 86400),\"results\":[{\"object\":\"organization.costs.result\",\"amount\":{\"value\":\(value),\"currency\":\"usd\"}}]}"
+            }
+            let body = "{\"object\":\"page\",\"data\":[\(buckets.joined(separator: ","))],\"has_more\":false}"
+            return try BalanceClient.decode(integrationID: integration, data: Data(body.utf8), source: URL(string: "https://api.openai.com")!, now: now)
+        }
         let body = integration == "openrouter"
             ? #"{"data":{"total_credits":100,"total_usage":30}}"#
             : #"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}"#

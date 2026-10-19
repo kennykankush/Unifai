@@ -565,7 +565,7 @@ struct WalletCard: View {
                 }
                 Spacer(minLength: 8)
                 Text(name).font(.system(size: 15, weight: .bold)).lineLimit(1)
-                Text(account.label + (account.billingScope.isEmpty ? "" : " · \(account.billingScope)"))
+                Text([account.label, account.snapshot?.plan ?? (account.billingScope.isEmpty ? nil : account.billingScope)].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(1)
                     .padding(.bottom, 10)
                 amount
@@ -583,6 +583,7 @@ struct WalletCard: View {
 
     @ViewBuilder private var status: some View {
         if account.lastError != nil { GlassChip(text: "Failed", dot: Palette.negative) }
+        else if account.snapshot?.limitReached == true { GlassChip(text: "Limit reached", dot: Palette.negative) }
         else if account.mode == .manual { GlassChip(text: "Manual", symbol: "square.and.pencil") }
         else if account.snapshot == nil { GlassChip(text: "No reading", dot: .white.opacity(0.6)) }
         else if account.snapshot!.isStale() { GlassChip(text: "Stale", dot: Palette.warning) }
@@ -593,8 +594,14 @@ struct WalletCard: View {
         HStack(alignment: .lastTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 if let snapshot = account.snapshot, let balance = snapshot.balances.first {
-                    Text("Available").font(.system(size: 11, weight: .medium)).opacity(0.7)
+                    Text(balance.currency == "CREDITS" ? "Codex credits" : "Available").font(.system(size: 11, weight: .medium)).opacity(0.7)
                     MoneyText(money: balance, size: 24)
+                } else if let snapshot = account.snapshot, let spent = snapshot.reportedConsumption.first {
+                    Text("Spent, \((snapshot.consumptionPeriod ?? "reported").lowercased())").font(.system(size: 11, weight: .medium)).opacity(0.7)
+                    MoneyText(money: spent, size: 24)
+                } else if let plan = account.snapshot?.plan {
+                    Text("Plan").font(.system(size: 11, weight: .medium)).opacity(0.7)
+                    Text(plan).font(.system(size: 20, weight: .bold)).tracking(-0.4)
                 } else if let first = paid.first {
                     Text("Paid").font(.system(size: 11, weight: .medium)).opacity(0.7)
                     MoneyText(money: first, size: 24)
@@ -604,12 +611,30 @@ struct WalletCard: View {
                 }
             }
             Spacer()
-            if let snapshot = account.snapshot, let used = Self.usedFraction(snapshot) {
+            if let windows = account.snapshot?.allowances, !windows.isEmpty {
+                VStack(alignment: .trailing, spacing: 6) {
+                    ForEach(windows.prefix(2)) { window in
+                        HStack(spacing: 6) {
+                            Text(Self.shortName(window)).font(.system(size: 10, weight: .semibold)).opacity(0.75)
+                            UsageMeter(used: Double(window.usedPercent) / 100, tint: window.usedPercent >= 100 ? Palette.hex(0xFFD1D1) : .white).frame(width: 54)
+                            Text("\(window.usedPercent)%").font(.system(size: 11, weight: .bold)).monospacedDigit().frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                }
+            } else if let snapshot = account.snapshot, let used = Self.usedFraction(snapshot) {
                 VStack(alignment: .trailing, spacing: 5) {
                     Text("\(Int((used * 100).rounded()))% used").font(.system(size: 11, weight: .semibold)).monospacedDigit()
                     UsageMeter(used: used).frame(width: 74)
                 }
             }
+        }
+    }
+
+    static func shortName(_ window: AllowanceWindow) -> String {
+        switch window.windowMinutes {
+        case 300: return "5h"
+        case 10080: return "Week"
+        default: return window.name.replacingOccurrences(of: " window", with: "")
         }
     }
 

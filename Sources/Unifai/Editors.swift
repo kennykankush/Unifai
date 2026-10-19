@@ -29,6 +29,8 @@ struct AccountEditor: View {
     @State private var mode: ConnectionMode
     @State private var credential = ""
     @State private var error: String?
+    @State private var signingIn = false
+    @State private var signInStatus: String?
     init(integration: Integration, account: ConnectedAccount?) {
         self.integration = integration; self.account = account
         _label = State(initialValue: account?.label ?? "")
@@ -40,21 +42,50 @@ struct AccountEditor: View {
             Section {
                 TextField("Account Label", text: $label, prompt: Text("Personal or Work"))
                 if account == nil {
-                    TextField("Billing Owner", text: $owner, prompt: Text("Organization or billing account"))
+                    TextField("Billing Owner", text: $owner, prompt: Text(integration.id == "codex" ? "ChatGPT Plus, personal" : "Organization or billing account"))
                     if integration.status == .ready {
-                        Picker("Connection", selection: $mode) { Text("Balance API").tag(ConnectionMode.live); Text("Manual Records").tag(ConnectionMode.manual) }
+                        Picker("Connection", selection: $mode) { Text("Live Connection").tag(ConnectionMode.live); Text("Manual Records").tag(ConnectionMode.manual) }
                     }
                 } else { LabeledContent("Billing Owner", value: owner.isEmpty ? "Unspecified" : owner) }
             } footer: { Text("Connect each billing owner once. Two keys for the same owner share one balance.") }
-            if mode == .live {
+            if mode == .live && !integration.needsCredential {
                 Section {
-                    SecureField(account == nil ? "Credential" : "Replace Credential", text: $credential, prompt: Text(account == nil ? "Paste a key" : "Leave blank to keep the saved key"))
-                        .textContentType(.password)
-                    Text(integration.id == "openrouter" ? "OpenRouter requires a management key. It has broad account authority; Unifai only sends GET /api/v1/credits." : "Unifai only sends GET /user/balance with the key you enter.")
+                    Label(integration.id == "codex" ? "Uses the Codex app on this Mac" : "Uses Claude Code on this Mac", systemImage: "terminal")
+                    Text(integration.id == "codex"
+                         ? "Unifai asks Codex for your ChatGPT plan, Codex usage windows and credits. Codex keeps the sign-in; Unifai stores no OpenAI password or token."
+                         : "Unifai asks Claude Code which plan you are signed in to. Claude Code keeps the sign-in; Unifai never reads its token. Anthropic does not share subscription usage limits with other apps.")
                         .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button(SignIn.title(integration.id)) { startSignIn() }.disabled(signingIn)
+                        if signingIn { ProgressView().controlSize(.small) }
+                        if let signInStatus { Text(signInStatus).font(.caption).foregroundStyle(.secondary) }
+                    }
+                } footer: { Text(integration.id == "codex" ? "Already signed in to Codex? Skip this and add the account." : "Already signed in to Claude Code? Skip this and add the account.") }
+            } else if mode == .live {
+                Section {
+                    SecureField(account == nil ? "Credential" : "Replace Credential", text: $credential, prompt: Text(account == nil ? (integration.id == "openai-api" ? "sk-admin-..." : "Paste a key") : "Leave blank to keep the saved key"))
+                        .textContentType(.password)
+                    Text(credentialHint).font(.caption).foregroundStyle(.secondary)
                 } footer: { Text("Saved per account in macOS Keychain. No refresh occurs until you click Refresh. In a synthetic workspace, keys stay in memory and requests use fixtures.") }
             }
             Section { Text(integration.limitation).font(.callout).foregroundStyle(.secondary) }
+        }
+    }
+    private func startSignIn() {
+        signingIn = true; signInStatus = integration.id == "codex" ? "Finish in your browser" : nil; error = nil
+        Task {
+            do {
+                try await SignIn.start(integration.id)
+                signInStatus = integration.id == "codex" ? "Signed in" : "Finish in Terminal, then add the account"
+            } catch { self.error = error.localizedDescription; signInStatus = nil }
+            signingIn = false
+        }
+    }
+    private var credentialHint: String {
+        switch integration.id {
+        case "openrouter": return "OpenRouter requires a management key. It has broad account authority; Unifai only sends GET /api/v1/credits."
+        case "openai-api": return "Create an organization Admin key at platform.openai.com > Settings > Organization > Admin keys. It has broad access; Unifai only sends GET /v1/organization/costs."
+        default: return "Unifai only sends GET /user/balance with the key you enter."
         }
     }
     private func save() {

@@ -90,8 +90,17 @@ struct MainWindowCommands: Commands {
               CommandLine.arguments.indices.contains(index + 1) else { return }
         let parts = CommandLine.arguments[index + 1].split(separator: ",").compactMap { Double($0) }
         guard parts.count == 2 else { return }
+        // Optional --test-window WxH fixes the window size first, so click coordinates are deterministic.
+        if let sizeIndex = CommandLine.arguments.firstIndex(of: "--test-window"), CommandLine.arguments.indices.contains(sizeIndex + 1) {
+            let size = CommandLine.arguments[sizeIndex + 1].split(separator: "x").compactMap { Double($0) }
+            DispatchQueue.main.async {
+                if size.count == 2, let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Unifai" }) {
+                    window.setFrame(NSRect(x: 100, y: 100, width: size[0], height: size[1]), display: true)
+                }
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView is NSHostingView<AnyView> || ($0.isVisible && $0.title == "Unifai") }) ?? NSApp.windows.first(where: \.isVisible) else { return }
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Unifai" }) ?? NSApp.windows.first(where: \.isVisible) else { return }
             let point = NSPoint(x: parts[0], y: window.frame.height - parts[1])
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -165,6 +174,13 @@ struct MenuPanel: View {
                             VStack(alignment: .trailing, spacing: 3) {
                                 if let snapshot = account.snapshot {
                                     ForEach(snapshot.balances) { MoneyText(money: $0, size: 13) }
+                                    if snapshot.balances.isEmpty, let spent = snapshot.reportedConsumption.first { MoneyText(money: spent, size: 13) }
+                                    if snapshot.balances.isEmpty, snapshot.reportedConsumption.isEmpty, let plan = snapshot.plan { Text(plan).font(.system(size: 12, weight: .semibold)) }
+                                    if let windows = snapshot.allowances, !windows.isEmpty {
+                                        Text(windows.map { "\(WalletCard.shortName($0)) \($0.usedPercent)%" }.joined(separator: " · "))
+                                            .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                                            .foregroundStyle(snapshot.limitReached == true ? Palette.negative : .secondary)
+                                    }
                                     if account.lastError != nil || snapshot.isStale() { Chip(text: "Needs attention", tint: Palette.warning) }
                                 } else { Text(account.mode == .manual ? "Manual" : "Not refreshed").font(.system(size: 11)).foregroundStyle(.tertiary) }
                             }

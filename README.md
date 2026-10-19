@@ -4,7 +4,7 @@ Unifai is a local macOS app that shows where your AI money stands: remaining cre
 
 ![Unifai overview](docs/screenshots/overview.png)
 
-- **Wallets** for OpenRouter and DeepSeek read live balances with keys stored in macOS Keychain. Any other provider can be tracked as a manual account.
+- **Wallets** read live balances from OpenRouter and DeepSeek, your ChatGPT plan with Codex usage limits and credits, your Claude plan, and OpenAI API spend. Any other provider can be tracked as a manual account.
 - **Payments** keeps a currency-preserving ledger of top-ups, subscription charges and refunds, with spend charts.
 - **Subscriptions** tracks expected renewals separately from money actually paid.
 - **Releases** follows public GitHub repositories without signing in.
@@ -57,6 +57,9 @@ Each account has its own label, billing owner and Keychain item. Add personal an
 | --- | --- | --- |
 | OpenRouter account | Remaining USD credit, reported purchased credits and consumption | Enter a management key, then click Refresh. This key has broad authority; the app only sends the credits GET request. Credit totals do not establish cash receipts or daily history. |
 | DeepSeek API | Current balances and purchased/promotional components, preserving currency | Enter an API key, then click Refresh. This endpoint supplies no payment or consumption history. |
+| ChatGPT & Codex | ChatGPT plan, Codex 5-hour and weekly limits with reset times, Codex credits | Install Codex (`brew install codex`), then **Sign in with ChatGPT** in Unifai or run `codex login`. Unifai talks to the local Codex app (`codex app-server`) and stores no OpenAI credential. |
+| Claude subscription / Code | Claude plan (Pro, Max, Team) and sign-in state | Install Claude Code, then **Sign in with Claude** (opens `claude auth login` in Terminal). Anthropic does not share subscription usage limits with other apps, so those stay in Claude Code's `/usage`. |
+| OpenAI API Platform | API spend per currency for the last 30 days | Enter an organization Admin key (`sk-admin-...`). Unifai only calls the Costs API; OpenAI has no prepaid balance endpoint. |
 | Manual financial accounts | Payments, refunds and expected renewals | Add confirmed records from receipts. Automatic balances and allowances remain unavailable. |
 | Public GitHub releases | Latest 50 published releases, original links, optional prereleases | Add `owner/repository`, then click Refresh. No credential is accepted or needed. |
 
@@ -121,7 +124,7 @@ Run the offline suite; the two explicit integration checks are skipped by defaul
 bash scripts/swift-local.sh test
 ```
 
-Opt in to the synthetic Keychain check and one anonymous public request to `swiftlang/swift`:
+Opt in to the synthetic Keychain check and one anonymous public request to `swiftlang/swift` (add `UNIFAI_TEST_CODEX=1` or `UNIFAI_TEST_CLAUDE=1` to read the local Codex or Claude Code sign-in):
 
 ```sh
 UNIFAI_TEST_KEYCHAIN=1 UNIFAI_TEST_PUBLIC_GITHUB=1 \

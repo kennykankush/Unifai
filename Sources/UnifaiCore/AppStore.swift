@@ -54,11 +54,15 @@ public final class AppStore: ObservableObject {
                 throw ValidationError.message("That billing owner is already connected. Replace its key instead of adding the balance again.")
             }
         }
+        if mode == .live && !integration.needsCredential && state.accounts.contains(where: { $0.mode == .live && $0.integrationID == integrationID }) {
+            throw ValidationError.message("This connection reads the single account signed in on this Mac, and it is already connected.")
+        }
+        let storesCredential = mode == .live && integration.needsCredential
         let account = ConnectedAccount(integrationID: integrationID, label: name, billingScope: owner, mode: mode)
-        if mode == .live { try vault.write(try validateCredential(credential), accountID: account.id) }
+        if storesCredential { try vault.write(try validateCredential(credential), accountID: account.id) }
         do { try change { $0.accounts.append(account) } }
         catch {
-            if mode == .live { try? vault.delete(accountID: account.id) }
+            if storesCredential { try? vault.delete(accountID: account.id) }
             throw error
         }
     }
@@ -70,7 +74,7 @@ public final class AppStore: ObservableObject {
         guard !name.isEmpty, !state.accounts.contains(where: { $0.id != id && $0.integrationID == account.integrationID && $0.label.caseInsensitiveCompare(name) == .orderedSame }) else {
             throw ValidationError.message("Enter a unique account label for this service.")
         }
-        let replacing = account.mode == .live && !credential.isEmpty
+        let replacing = account.mode == .live && !credential.isEmpty && Catalogue.integration(account.integrationID)?.needsCredential != false
         let previous = replacing ? try vault.read(accountID: id) : nil
         if replacing { try vault.write(try validateCredential(credential), accountID: id) }
         do {
@@ -142,7 +146,12 @@ public final class AppStore: ObservableObject {
         do {
             try change { $0.accounts[index].lastAttempt = now }
             let account = state.accounts[index]
-            guard let credential = try vault.read(accountID: id) else { throw ConnectorError.missingCredential }
+            let credential: String
+            if Catalogue.integration(account.integrationID)?.needsCredential == false { credential = "" }
+            else {
+                guard let saved = try vault.read(accountID: id) else { throw ConnectorError.missingCredential }
+                credential = saved
+            }
             let snapshot = try await balances(account.integrationID, credential, now)
             try change { next in
                 guard let current = next.accounts.firstIndex(where: { $0.id == id }) else { return }

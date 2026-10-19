@@ -27,14 +27,14 @@ let tools: [[String: Any]] = [
     [
         "name": "get_overview",
         "title": "AI spending overview",
-        "description": "Start here. Summarises the user's AI provider accounts: remaining credit per account and currency, total money paid, renewals due in the next 30 days, and accounts whose readings are stale or failed. Values are the last readings saved by the Unifai app.",
+        "description": "Start here. Summarises the user's AI accounts: remaining credit per account and currency, ChatGPT and Claude plans, Codex usage windows, OpenAI API spend, total money paid, renewals due in the next 30 days, and accounts whose readings are stale or failed. Values are the last readings saved by the Unifai app.",
         "inputSchema": ["type": "object", "properties": [String: Any](), "additionalProperties": false],
         "annotations": ["readOnlyHint": true, "openWorldHint": false]
     ],
     [
         "name": "get_balances",
         "title": "Account balances",
-        "description": "Remaining credit (wallet balance) for each connected AI account, such as OpenRouter or DeepSeek, with purchased/promotional components, provider-reported consumption, when it was observed and whether it is stale. Balances are per account and per currency; never sum across accounts or currencies.",
+        "description": "Per-account wallet readings: remaining credit (OpenRouter, DeepSeek, Codex credits), provider-reported spend (OpenAI API, last 30 days), the subscription plan (ChatGPT, Claude) and usage windows such as Codex's 5-hour and weekly limits with percent used and reset time. Includes when each reading was observed and whether it is stale. Never sum across accounts or currencies.",
         "inputSchema": [
             "type": "object",
             "properties": ["provider": ["type": "string", "description": "Optional filter matched against provider id or name, account label or billing owner, e.g. \"openrouter\", \"deepseek\", \"work\"."]],
