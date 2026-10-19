@@ -10,7 +10,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "UnifaiCore"),
-        .executableTarget(name: "Unifai", dependencies: ["UnifaiCore"], resources: [.copy("Resources/Logos")]),
+        // Provider logos are copied into Contents/Resources/Logos by scripts/assemble-app.sh.
+        .executableTarget(name: "Unifai", dependencies: ["UnifaiCore"], exclude: ["Resources"]),
         .executableTarget(name: "UnifaiMCP", dependencies: ["UnifaiCore"]),
         .testTarget(name: "UnifaiCoreTests", dependencies: ["UnifaiCore"])
     ],

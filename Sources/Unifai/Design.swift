@@ -121,7 +121,8 @@ enum Logos {
     private static var images: [String: NSImage] = [:]
     static func image(_ name: String) -> NSImage? {
         if let cached = images[name] { return cached }
-        guard let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Logos"),
+        // Bundled at Contents/Resources/Logos by scripts/assemble-app.sh; missing logos fall back to symbols.
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "Logos"),
               let image = NSImage(contentsOf: url) else { return nil }
         image.isTemplate = !name.hasSuffix("-color")
         images[name] = image

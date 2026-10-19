@@ -10,6 +10,16 @@ struct UnifaiApp: App {
 
     init() {
         let args = CommandLine.arguments
+        // Build-time helper: render the app icon to a PNG for the .icns, then exit.
+        if let index = args.firstIndex(of: "--export-icon"), args.indices.contains(index + 1) {
+            guard let image = AppIconArtwork.render(), let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+                  (try? png.write(to: URL(fileURLWithPath: args[index + 1]))) != nil else { exit(1) }
+            exit(0)
+        }
+        // Channels keep the local development build apart from the official release:
+        // separate data folder and Keychain service, so both can be installed side by side.
+        let channel = Bundle.main.object(forInfoDictionaryKey: "UnifaiChannel") as? String ?? "release"
         fixtureMode = args.contains("--fixture-mode") || Bundle.main.object(forInfoDictionaryKey: "UnifaiFixtureMode") as? Bool == true
         let directory: URL
         if let index = args.firstIndex(of: "--data-directory"), args.indices.contains(index + 1), args[index + 1].hasPrefix("/") {
@@ -17,7 +27,8 @@ struct UnifaiApp: App {
         } else if fixtureMode, let path = Bundle.main.object(forInfoDictionaryKey: "UnifaiDataDirectory") as? String {
             directory = URL(fileURLWithPath: path, isDirectory: true)
         } else {
-            directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(fixtureMode ? "Unifai Fixtures" : "Unifai", isDirectory: true)
+            let folder = fixtureMode ? "Unifai Fixtures" : channel == "dev" ? "Unifai Dev" : "Unifai"
+            directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(folder, isDirectory: true)
         }
         let repository = StateRepository(directory: directory)
         let model: AppStore
@@ -32,9 +43,12 @@ struct UnifaiApp: App {
             if Bundle.main.object(forInfoDictionaryKey: "UnifaiKeychainCheck") as? Bool == true {
                 FixtureWorkspace.checkNativeKeychain(directory: directory)
             }
+        } else if channel == "dev" {
+            model = AppStore(repository: repository, vault: KeychainVault(service: "dev.unifai.dev.account-credentials.v1"))
         } else { model = AppStore(repository: repository) }
         AppRuntime.store = model
         AppRuntime.fixtureMode = fixtureMode
+        AppRuntime.channel = fixtureMode ? "fixture" : channel
         // Fixture-only: open a specific screen for visual verification.
         if fixtureMode, let index = args.firstIndex(of: "--destination"), args.indices.contains(index + 1) {
             AppRuntime.initialDestination = Destination(rawValue: args[index + 1])
@@ -65,6 +79,7 @@ struct MainWindowCommands: Commands {
 @MainActor enum AppRuntime {
     static var store: AppStore?
     static var fixtureMode = false
+    static var channel = "release"
     static var initialDestination: Destination?
     static var showCompanion: (() -> Void)?
     static var openMain: (() -> Void)?

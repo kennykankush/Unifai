@@ -127,6 +127,7 @@ struct MainView: View {
                 AppMark(size: 30)
                 Text("Unifai.").font(.system(size: 19, weight: .semibold)).tracking(-0.6)
                 if fixtureMode { Chip(text: "Demo", tint: Palette.warning, symbol: "testtube.2") }
+                else if AppRuntime.channel == "dev" { Chip(text: "Dev", tint: Palette.accentInk, symbol: "hammer.fill") }
             }
             .fixedSize()
             Spacer(minLength: compact ? 12 : 24)
@@ -179,13 +180,16 @@ struct MainView: View {
         }
     }
 
+    /// Setup line for the MCP server shipped inside this app bundle (or a local release build of it).
     private var mcpCommand: String? {
-        let binary = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("release/unifai-mcp")
-        guard FileManager.default.isExecutableFile(atPath: binary.path) else { return nil }
+        let bundled = Bundle.main.url(forAuxiliaryExecutable: "unifai-mcp")
+        let local = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("release/unifai-mcp")
+        guard let binary = [bundled, local].compactMap({ $0 }).first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else { return nil }
         let defaultDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Unifai", isDirectory: true)
         let directory = store.repository.directory.standardizedFileURL
         let extra = directory == defaultDirectory.standardizedFileURL ? "" : " --data-directory \"\(directory.path)\""
-        return "claude mcp add --scope user unifai -- \"\(binary.path)\"\(extra)"
+        let name = AppRuntime.channel == "release" ? "unifai" : "unifai-\(AppRuntime.channel)"
+        return "claude mcp add --scope user \(name) -- \"\(binary.path)\"\(extra)"
     }
 
     private func agentButton(compact: Bool) -> some View {

@@ -52,3 +52,8 @@ Authenticated OpenRouter and DeepSeek responses have not been witnessed against 
 The app has a local ad-hoc signature and no distribution qualification. macOS 14 runtime compatibility, light appearance and VoiceOver operation remain unverified. The persisted store assumes one process per data directory and has no automatic backup or sync.
 
 WidgetKit remains the intended follow-on surface. Quotas and reset windows, Claude and OpenAI reporting, invoice imports, public feeds, richer discovery and notifications remain deferred. X remains disabled. This milestone keeps the broader hub visible without claiming those integrations work.
+
+## Channels and releases
+
+`scripts/assemble-app.sh` builds every bundle from one place. The `dev` channel (`scripts/build-app.sh`) produces **Unifai Dev** with bundle identifier `dev.unifai.dev`, data in `Application Support/Unifai Dev` and Keychain service `dev.unifai.dev.account-credentials.v1`. The `fixture` channel produces the synthetic demo. The `release` channel produces the official **Unifai** (`dev.unifai.app`), which `scripts/release.sh` signs with Developer ID and hardened runtime, notarizes, publishes to GitHub Releases and announces through the `kennykankush/homebrew-tap` cask. The version comes from `VERSION`; the build number is the commit count. Provider logos are copied into `Contents/Resources/Logos` rather than a SwiftPM resource bundle, which keeps Developer ID signing straightforward.
+

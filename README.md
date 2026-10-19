@@ -20,20 +20,32 @@ Everything stays on your Mac. There is no account, server or sync. The first nat
 
 Screenshots use the synthetic demo workspace described below; no real account data is shown.
 
-## Run the app
+## Install
+
+Install the signed, notarized app with Homebrew:
+
+```sh
+brew install --cask kennykankush/tap/unifai
+```
+
+Update with `brew upgrade --cask unifai`. The cask also links `unifai-mcp` onto your PATH. Releases are built for Apple silicon and need macOS 14 or later.
+
+## Develop locally
 
 Use a Mac with Xcode and Swift installed. This checkout was built with Swift 6.2 and Xcode 26.0.1 on macOS 26.5, Apple silicon. The deployment target is macOS 14; an actual macOS 14 machine has not been tested.
 
-Build the local app bundle and open it:
+Build the local development app and open it:
 
 ```sh
 git clone https://github.com/kennykankush/Unifai.git
 cd Unifai
 bash scripts/build-app.sh
-open .build/Unifai.app
+open ".build/Unifai Dev.app"
 ```
 
-The build uses no package dependencies and applies a local ad-hoc signature. It requires no Apple developer account. The app has not been notarized or prepared for distribution.
+**Unifai Dev** is a separate app from the official **Unifai**. It shows a Dev tag, stores data in `~/Library/Application Support/Unifai Dev` and uses its own Keychain service, so you can run a development build next to the Homebrew install without either touching the other's accounts or records.
+
+The build uses no package dependencies and applies a local ad-hoc signature. It requires no Apple developer account.
 
 The window opens on **Overview** with an empty state. Click **Add Wallet**, or open **Catalogue** in the top bar, to add an account. The top bar switches between Overview, Wallets, Payments, Subscriptions, Releases and Catalogue, and its lime button runs the current page's main action. A dot marks Wallets when a reading failed or went stale, and Subscriptions when a renewal is due within a week. Press Command-F to search the current page and Command-N for the main action. Use the menu bar stack icon for the companion. **File > Show Companion** opens the same panel; **File > Show Unifai** returns to the main window. Closing the window keeps the companion running. Quit from the app menu or companion.
 
@@ -60,12 +72,13 @@ Money paid, provider-reported consumption, remaining credit and expected renewal
 
 `unifai-mcp` is a read-only MCP server over stdio. Any MCP client, such as Claude Code, Codex or Cursor, can use it to answer "how much credit do I have left?" from the same data the app shows.
 
+With the Homebrew install, the server ships inside the app:
+
 ```sh
-bash scripts/build-mcp.sh
-claude mcp add --scope user unifai -- "$PWD/.build/release/unifai-mcp"
+claude mcp add --scope user unifai -- /Applications/Unifai.app/Contents/MacOS/unifai-mcp
 ```
 
-Once the server is built, the white **Agent access** button in the app's top bar copies the exact setup line for this checkout and data directory.
+The white **Agent access** button in the app's top bar copies the exact setup line for whichever app you are running. Development builds register as `unifai-dev` and point at the Unifai Dev data folder. To build only the server from source, run `bash scripts/build-mcp.sh`.
 
 | Tool | Returns |
 | --- | --- |
@@ -117,11 +130,25 @@ UNIFAI_TEST_KEYCHAIN=1 UNIFAI_TEST_PUBLIC_GITHUB=1 \
 
 The offline suite currently runs 35 tests, with the two integration checks skipped. An earlier witnessed full run, with both integration checks enabled, passed 32 tests with no failures or skips. It retrieved 50 public GitHub releases in one request. Debug and optimized builds passed. [Native checks](evidence/VERIFICATION.md) covered empty state, account setup, both fixture balances, retained error readings, payments, schedules, catalogue search, releases, resizing and the companion.
 
+## Release
+
+Official releases come from `scripts/release.sh` on the release Mac. It runs the tests, builds an optimized app, signs the app and the embedded `unifai-mcp` with a Developer ID certificate and hardened runtime, notarizes and staples it, tags `v<VERSION>`, uploads the zip to GitHub Releases, and updates the cask in [kennykankush/homebrew-tap](https://github.com/kennykankush/homebrew-tap).
+
+```sh
+# once: save notarization credentials (app-specific password from account.apple.com)
+xcrun notarytool store-credentials unifai --apple-id <apple id> --team-id <team id>
+
+# each release: bump VERSION, commit and push main, then
+bash scripts/release.sh
+```
+
+`bash scripts/release.sh --dry-run` builds, signs and verifies locally without notarizing or publishing.
+
 ## Remaining limits
 
 OpenRouter and DeepSeek have contract, parsing and failure-path validation with synthetic fixtures. Authentication against real provider accounts remains unverified until keys are entered. No paid provider or news request was made during development.
 
-WidgetKit, quota/reset tracking, Claude/OpenAI organization reporting, invoice imports, RSS, X, richer discovery, notifications and sync remain deferred. X access is disabled. Renewal advancement is manual. Light appearance, VoiceOver operation and macOS 14 hardware have not received hands-on verification. The app is a local milestone, not a distribution release.
+WidgetKit, quota/reset tracking, Claude/OpenAI organization reporting, invoice imports, RSS, X, richer discovery, notifications and sync remain deferred. X access is disabled. Renewal advancement is manual. Light appearance, VoiceOver operation and macOS 14 hardware have not received hands-on verification. Releases are Apple silicon only.
 
 ## Credits
 
