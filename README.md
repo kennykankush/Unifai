@@ -49,7 +49,7 @@ open ".build/Unifai Dev.app"
 
 The build uses no package dependencies and applies a local ad-hoc signature. It requires no Apple developer account.
 
-The window opens on **Overview** with an empty state. Click **Add Wallet**, or open **Catalogue** in the top bar, to add an account. The top bar switches between Overview, Wallets, Payments, Subscriptions, Timeline and Catalogue, and its lime button runs the current page's main action. A dot marks Wallets when a reading failed or went stale, Subscriptions when a renewal is due within a week, and Timeline when something important happened in the last day. Press Command-F to search the current page and Command-N for the main action. Use the menu bar stack icon for the companion. **File > Show Companion** opens the same panel; **File > Show Unifai** returns to the main window. Closing the window keeps the companion running. Quit from the app menu or companion.
+The window opens on **Overview** with an empty state. Click **Add Wallet**, or open **Catalogue** in the top bar, to add an account. The floating top bar (Liquid Glass on macOS 26) switches between Overview, Wallets, Payments, Subscriptions, Timeline and Catalogue, and its lime button runs the current page's main action. A dot marks Wallets when a reading failed or went stale, Subscriptions when a renewal is due within a week, and Timeline when something important happened in the last day. Press Command-F to search the current page and Command-N for the main action. Use the menu bar stack icon for the companion. **File > Show Companion** opens the same panel; **File > Show Unifai** returns to the main window. Closing the window keeps the companion running. Quit from the app menu or companion.
 
 ## Connect accounts and record money
 

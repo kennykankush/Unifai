@@ -875,15 +875,42 @@ struct AppIconArtwork: View {
 
 /// Makes the main window a single solid surface: transparent title bar over our own header,
 /// draggable from empty areas, opaque background, and traffic lights centred in the header.
+// MARK: - Floating bar
+
+/// Geometry of the floating top bar: a capsule inset from the window edges.
+enum FloatingBar {
+    static let height: CGFloat = 56
+    static let inset: CGFloat = 10
+    static let sideInset: CGFloat = 12
+    /// Space the bar takes at the top of each page.
+    static let reserved: CGFloat = inset + height + 8
+}
+
+extension View {
+    /// Liquid Glass on macOS 26 and later; a frosted capsule with a light rim before that.
+    @ViewBuilder func floatingGlass() -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: Capsule())
+                .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+        } else {
+            self.background(Capsule().fill(.ultraThinMaterial))
+                .background(Capsule().fill(Palette.bar.opacity(0.55)))
+                .overlay(Capsule().strokeBorder(LinearGradient(colors: [Color.white.opacity(0.16), Color.white.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                .shadow(color: .black.opacity(0.3), radius: 18, y: 8)
+        }
+    }
+}
+
 struct WindowConfigurator: NSViewRepresentable {
     var headerHeight: CGFloat = 64
+    var trafficLightsX: CGFloat = 20
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { configure(view.window, coordinator: context.coordinator) }
         return view
     }
     func updateNSView(_ view: NSView, context: Context) { DispatchQueue.main.async { configure(view.window, coordinator: context.coordinator) } }
-    func makeCoordinator() -> TrafficLights { TrafficLights(headerHeight: headerHeight) }
+    func makeCoordinator() -> TrafficLights { TrafficLights(headerHeight: headerHeight, leading: trafficLightsX) }
     private func configure(_ window: NSWindow?, coordinator: TrafficLights) {
         guard let window else { return }
         window.titlebarAppearsTransparent = true
@@ -921,9 +948,10 @@ struct WindowDragArea: NSViewRepresentable {
 /// AppKit lays them out again on resize and full-screen changes, so this re-applies after each.
 @MainActor final class TrafficLights: NSObject {
     let headerHeight: CGFloat
+    let leading: CGFloat
     private weak var window: NSWindow?
     private var observers: [NSObjectProtocol] = []
-    init(headerHeight: CGFloat) { self.headerHeight = headerHeight }
+    init(headerHeight: CGFloat, leading: CGFloat = 20) { self.headerHeight = headerHeight; self.leading = leading }
     func attach(to window: NSWindow) {
         if self.window !== window {
             self.window = window
@@ -948,7 +976,7 @@ struct WindowDragArea: NSViewRepresentable {
         let offset = (headerHeight - titlebar.frame.height) / 2
         let y = (titlebar.frame.height - buttonHeight) / 2 - offset
         for (index, button) in [close, mini, zoom].enumerated() {
-            button.setFrameOrigin(NSPoint(x: 20 + CGFloat(index) * 20, y: y))
+            button.setFrameOrigin(NSPoint(x: leading + CGFloat(index) * 20, y: y))
         }
     }
 }

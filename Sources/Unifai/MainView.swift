@@ -62,8 +62,8 @@ struct MainView: View {
     struct Removal: Identifiable { let id = UUID(); let title: String; let action: () throws -> Void }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
+        // Pages scroll under the floating bar, so the glass has colour to refract.
+        ZStack(alignment: .top) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let error = store.loadFailure { InlineNotice(text: error).padding(.bottom, 18) }
@@ -74,13 +74,23 @@ struct MainView: View {
                 .frame(maxWidth: 1240, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .defaultScrollAnchor(.top)
+            .contentMargins(.top, FloatingBar.reserved, for: .scrollContent)
+            .contentMargins(.top, FloatingBar.reserved - 4, for: .scrollIndicators)
+            .defaultScrollAnchor(AppRuntime.initialScroll ?? .top)
             .id(destination)
             .transition(.identity)
             .background(Palette.canvas)
+            // Soft edge: content fades as it slides under the bar instead of colliding with it.
+            // Solid above the bar so nothing peeks through the gap; a soft fade below it.
+            LinearGradient(stops: [.init(color: Palette.canvas, location: 0), .init(color: Palette.canvas, location: 0.16),
+                                   .init(color: Palette.canvas.opacity(0.7), location: 0.6), .init(color: Palette.canvas.opacity(0), location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: FloatingBar.reserved + 18)
+                .allowsHitTesting(false)
+            topBar
         }
         .background(Palette.canvas)
-        .background(WindowConfigurator(headerHeight: 64))
+        .background(WindowConfigurator(headerHeight: FloatingBar.inset * 2 + FloatingBar.height, trafficLightsX: FloatingBar.sideInset + 20))
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: destination) { _, _ in search = "" }
         .task {
@@ -143,11 +153,12 @@ struct MainView: View {
             topBarContent(compact: false)
             topBarContent(compact: true)
         }
-        .padding(.leading, 92).padding(.trailing, 20)
-        .frame(height: 64)
-        .background(WindowDragArea())
-        .background(Palette.bar)
-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.opacity(0.7)).frame(height: 1) }
+        // The window buttons sit inside the bar's left end.
+        .padding(.leading, 82).padding(.trailing, 8)
+        .frame(height: FloatingBar.height)
+        .background(WindowDragArea().clipShape(Capsule()))
+        .floatingGlass()
+        .padding(.top, FloatingBar.inset).padding(.horizontal, FloatingBar.sideInset)
     }
 
     private func topBarContent(compact: Bool) -> some View {
@@ -1217,6 +1228,8 @@ struct MainView: View {
                 Spacer()
                 if integration.id == "github-releases" {
                     Button("Follow Repository") { editor = .repository }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
+                } else if integration.id == "x-accounts" {
+                    Button("Set Up in Settings") { editor = .settings }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                 } else if [.providers, .subscriptions, .cloud].contains(integration.category) {
                     if integration.status == .ready {
                         Button("Add Account") { editor = .account(integration, nil) }.buttonStyle(PillButtonStyle(kind: .primary, compact: true))
