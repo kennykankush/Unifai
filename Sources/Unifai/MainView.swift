@@ -82,6 +82,7 @@ struct MainView: View {
             // Record renewals that fell due while the app was closed, then check every 30 minutes.
             while !Task.isCancelled {
                 announce(store.recordDueRenewals())
+                await store.refreshRatesIfNeeded()
                 try? await Task.sleep(for: .seconds(1800))
             }
         }
@@ -297,9 +298,56 @@ struct MainView: View {
         }
     }
     private func paidTotals(for account: ConnectedAccount) -> [Money] { Ledger.paidTotals(store.state.payments.filter { $0.accountID == account.id }) }
-    private var chartCurrencies: [String] { SpendSeries.currencies(store.state.payments) }
+    /// Payments feeding spending views: converted into the display currency when combining.
+    private var spendPayments: [PaymentRecord] {
+        guard let target = store.state.displayCurrency, let rates = store.rates else { return store.state.payments }
+        return store.state.payments(in: target, rates: rates).converted
+    }
+    private var unconvertedPayments: [PaymentRecord] {
+        guard let target = store.state.displayCurrency, let rates = store.rates else { return [] }
+        return store.state.payments(in: target, rates: rates).unconverted
+    }
+    private var combining: Bool { store.state.displayCurrency != nil && store.rates != nil }
+    private var defaultDisplayCurrency: String {
+        let currencies = SpendSeries.currencies(store.state.payments)
+        if let local = Locale.current.currency?.identifier, currencies.contains(local) { return local }
+        return currencies.first ?? "USD"
+    }
+    private var chartCurrencies: [String] { combining ? [store.state.displayCurrency!] : SpendSeries.currencies(store.state.payments) }
     private var activeCurrency: String { chartCurrencies.contains(chartCurrency) ? chartCurrency : (chartCurrencies.first ?? "USD") }
     private var currencyBinding: Binding<String> { Binding(get: { activeCurrency }, set: { chartCurrency = $0 }) }
+
+    /// Currency control for spending views: combine everything into one currency, or show one currency at a time.
+    @ViewBuilder private func currencyControl(onColor: Bool, offerCombine: Bool = true) -> some View {
+        let currencies = SpendSeries.currencies(store.state.payments)
+        if let target = store.state.displayCurrency {
+            PillMenu(options: currencies.map { Optional($0) } + [nil],
+                     selection: Binding(get: { Optional(target) }, set: { value in Task { await store.setDisplayCurrency(value) } }),
+                     onColor: onColor) { $0.map { "All in \($0)" } ?? "Each currency separately" }
+                .help("Spending converted at European Central Bank reference rates on each payment date. Recorded amounts are unchanged.")
+        } else if currencies.count > 1 && !offerCombine {
+            PillMenu(options: currencies, selection: currencyBinding, onColor: onColor) { $0 }
+        } else if currencies.count > 1 {
+            HStack(spacing: 6) {
+                PillMenu(options: currencies, selection: currencyBinding, onColor: onColor) { $0 }
+                Button { Task { await store.setDisplayCurrency(defaultDisplayCurrency) } } label: { Label("Combine", systemImage: "arrow.triangle.merge") }
+                    .buttonStyle(PillButtonStyle(kind: onColor ? .glass : .secondary, compact: true))
+                    .help("Show all spending in \(defaultDisplayCurrency), converted at ECB reference rates on each payment date")
+            }
+        } else if onColor, let only = currencies.first {
+            GlassChip(text: only)
+        }
+    }
+
+    private var conversionCaption: String? {
+        guard let target = store.state.displayCurrency else { return nil }
+        if store.rates == nil { return store.refreshingRates ? "Downloading exchange rates..." : nil }
+        let others = Set(store.state.payments.map(\.money.currency)).subtracting([target]).sorted()
+        var text = others.isEmpty ? "All payments in \(target)" : "\(others.joined(separator: ", ")) converted to \(target) at ECB rates on each payment date, approximate"
+        let skipped = unconvertedPayments.count
+        if skipped > 0 { text += ". \(skipped) payment\(skipped == 1 ? "" : "s") in other units not included" }
+        return text
+    }
 
     private func refreshAll() {
         let ids = store.state.accounts.filter { $0.mode == .live && ($0.lastAttempt.map { Date.now.timeIntervalSince($0) >= 60 } ?? true) }.map(\.id)
@@ -432,9 +480,9 @@ struct MainView: View {
 
     private var heroCard: some View {
         let currency = activeCurrency
-        let total = Ledger.paidTotals(store.state.payments).first { $0.currency == currency }
-        let month = SpendSeries.paidThisMonth(store.state.payments, currency: currency)
-        let points = SpendSeries.cumulative(store.state.payments, currency: currency, start: store.state.coverageStart)
+        let total = Ledger.paidTotals(spendPayments).first { $0.currency == currency }
+        let month = SpendSeries.paidThisMonth(spendPayments, currency: currency)
+        let points = SpendSeries.cumulative(spendPayments, currency: currency, start: store.state.coverageStart)
         return ZStack(alignment: .topLeading) {
             MeshBackdrop(colors: Palette.hero)
             VStack(alignment: .leading, spacing: 0) {
@@ -445,8 +493,7 @@ struct MainView: View {
                     }
                     .opacity(0.9)
                     Spacer()
-                    if chartCurrencies.count > 1 { PillMenu(options: chartCurrencies, selection: currencyBinding, onColor: true) { $0 } }
-                    else { GlassChip(text: currency) }
+                    currencyControl(onColor: true)
                 }
                 Spacer(minLength: 10)
                 HStack(alignment: .bottom) {
@@ -463,7 +510,7 @@ struct MainView: View {
                                 .padding(.horizontal, 9).frame(height: 24)
                                 .background(Capsule().fill(Palette.lime))
                             }
-                            Text(store.state.coverageDescription).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(1)
+                            Text(conversionCaption ?? store.state.coverageDescription).font(.system(size: 12, weight: .medium)).opacity(0.75).lineLimit(2)
                         }
                     }
                     Spacer(minLength: 16)
@@ -596,6 +643,7 @@ struct MainView: View {
             if detected > 0 { lines.append("Found \(detected) recurring subscription\(detected == 1 ? "" : "s") to review in Subscriptions.") }
             if !summary.createdAccounts.isEmpty { lines.append("Added wallets: \(summary.createdAccounts.joined(separator: ", ")).") }
             store.notice = lines.joined(separator: " ")
+            Task { await store.refreshRatesIfNeeded() }
         } catch {
             store.notice = "Nothing was imported. \(error.localizedDescription)"
         }
@@ -660,10 +708,10 @@ struct MainView: View {
 
     private var spendingPanel: some View {
         let currency = activeCurrency
-        let slices = SpendSeries.byProvider(store.state.payments, accounts: store.state.accounts, currency: currency)
+        let slices = SpendSeries.byProvider(spendPayments, accounts: store.state.accounts, currency: currency)
         return VStack(alignment: .leading, spacing: 16) {
             SectionHeading(title: "Spending") {
-                if chartCurrencies.count > 1 { PillMenu(options: chartCurrencies, selection: currencyBinding) { $0 } }
+                currencyControl(onColor: false, offerCombine: false)
             }
             if slices.isEmpty {
                 Text("No payments in \(currency) yet.").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -824,10 +872,10 @@ struct MainView: View {
 
     private var payments: some View {
         let currency = activeCurrency
-        let month = SpendSeries.paidThisMonth(store.state.payments, currency: currency)
+        let month = SpendSeries.paidThisMonth(spendPayments, currency: currency)
         let items = store.state.payments.filter { matches($0.description, $0.reference, accountName($0.accountID), $0.money.currency) }.sorted { $0.paidAt > $1.paidAt }
         return VStack(alignment: .leading, spacing: 18) {
-            pageHeader("Payments", "Settled charges and refunds from receipts. Amounts stay grouped by currency.",
+            pageHeader("Payments", combining ? "Settled charges and refunds from receipts. Shown in \(store.state.displayCurrency!); each payment keeps its recorded currency." : "Settled charges and refunds from receipts. Amounts stay grouped by currency.",
                        chip: month > 0 ? Chip(text: "+\(Money(Decimal(month), currency).amountText) \(currency) this month", tint: Palette.lime, symbol: "arrow.up.right", filled: true) : nil)
                 .padding(.bottom, -18)
             HStack(alignment: .top, spacing: 18) {
@@ -835,17 +883,17 @@ struct MainView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Spend over time").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                            if let total = Ledger.paidTotals(store.state.payments).first(where: { $0.currency == currency }) { MoneyText(money: total, size: 30, weight: .heavy) }
+                            if let total = Ledger.paidTotals(spendPayments).first(where: { $0.currency == currency }) { MoneyText(money: total, size: 30, weight: .heavy) }
                         }
                         Spacer()
                         SegmentedPills(options: ["Cumulative", "Monthly"], selection: $chartMode) { $0 }
-                        if chartCurrencies.count > 1 { PillMenu(options: chartCurrencies, selection: currencyBinding) { $0 } }
+                        currencyControl(onColor: false)
                     }
-                    if store.state.payments.contains(where: { $0.money.currency == currency }) {
+                    if spendPayments.contains(where: { $0.money.currency == currency }) {
                         if chartMode == "Monthly" {
-                            MonthlyBarsChart(months: SpendSeries.monthly(store.state.payments, accounts: store.state.accounts, currency: currency), currency: currency)
+                            MonthlyBarsChart(months: SpendSeries.monthly(spendPayments, accounts: store.state.accounts, currency: currency), currency: currency)
                         } else {
-                            SpendAreaChart(points: SpendSeries.cumulative(store.state.payments, currency: currency, start: store.state.coverageStart), currency: currency)
+                            SpendAreaChart(points: SpendSeries.cumulative(spendPayments, currency: currency, start: store.state.coverageStart), currency: currency)
                         }
                     } else {
                         emptyState("No chart yet", "Payments appear here once recorded.", "chart.xyaxis.line")
@@ -857,7 +905,13 @@ struct MainView: View {
                     Text("Totals").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
                     let totals = Ledger.paidTotals(store.state.payments)
                     if totals.isEmpty { Text("Nothing recorded").font(.system(size: 20, weight: .bold)).foregroundStyle(.secondary) }
-                    ForEach(totals) { MoneyText(money: $0, size: 26, weight: .heavy) }
+                    if combining, let combined = Ledger.paidTotals(spendPayments).first {
+                        MoneyText(money: combined, size: 28, weight: .heavy)
+                        Text("Recorded as").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        ForEach(totals) { MoneyText(money: $0, size: 14, weight: .semibold).foregroundStyle(.secondary) }
+                    } else {
+                        ForEach(totals) { MoneyText(money: $0, size: 26, weight: .heavy) }
+                    }
                     Spacer(minLength: 0)
                     Chip(text: store.state.historyCoverage?.completeForPeriod == true ? "Complete for period" : "Partial history",
                          tint: store.state.historyCoverage?.completeForPeriod == true ? Palette.positive : Palette.warning)

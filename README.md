@@ -76,7 +76,9 @@ Schedules can record each renewal automatically. When a renewal date passes, Uni
 
 In **Subscriptions**, save an expected amount, cadence and renewal date. A schedule creates no payments. After a renewal settles, choose **Record Settled Payment**, confirm the receipt, and update the next expected date. A ChatGPT plan shared with Codex should be recorded once.
 
-Money paid, provider-reported consumption, remaining credit and expected renewals stay separate. A USD 100 top-up followed by USD 30 of consumption is USD 100 paid and USD 70 remaining. Currencies are never combined. Payment history shows its start and whether you have confirmed completeness for that period; it does not claim a lifetime total from a current balance.
+Spending can be combined into one currency: choose **Combine** on the Overview card (or **All in …** from any currency menu). Each payment is converted at the European Central Bank reference rate for its own date, downloaded once a day from the ECB data API and cached as `exchange-rates.json`. Combined figures are labelled approximate because card issuers use their own rates; recorded amounts never change, and **Each currency separately** turns conversion off. The MCP server adds `paidTotalConverted` when conversion is on.
+
+Money paid, provider-reported consumption, remaining credit and expected renewals stay separate. A USD 100 top-up followed by USD 30 of consumption is USD 100 paid and USD 70 remaining. Currencies are only combined in the optional converted view. Payment history shows its start and whether you have confirmed completeness for that period; it does not claim a lifetime total from a current balance.
 
 ## Let agents read your balances (MCP)
 

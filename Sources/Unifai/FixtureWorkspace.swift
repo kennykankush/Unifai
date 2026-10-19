@@ -98,6 +98,18 @@ enum FixtureWorkspace {
             : #"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}"#
         return try BalanceClient.decode(integrationID: integration, data: Data(body.utf8), source: URL(string: integration == "openrouter" ? "https://openrouter.ai/api/v1/credits" : "https://api.deepseek.com/user/balance")!, now: now)
     }
+    /// Synthetic reference rates; the demo never contacts the ECB.
+    static func rates(_ currencies: [String], _ since: Date, _ now: Date) async throws -> RateTable {
+        let base: [String: Double] = ["USD": 1.08, "SGD": 1.43, "CNY": 7.6, "GBP": 0.85, "JPY": 160]
+        var rates: [String: [String: Double]] = [:]
+        var day = Calendar.current.startOfDay(for: since).addingTimeInterval(-14 * 86400)
+        while day <= now {
+            rates[RateTable.dayFormatter.string(from: day)] = base.filter { currencies.contains($0.key) }
+            day = day.addingTimeInterval(86400)
+        }
+        return RateTable(rates: rates, fetchedAt: now, currencies: currencies)
+    }
+
     static func releases(_ repository: WatchedRepository, _ now: Date) async throws -> GitHubFetchResult {
         let data = Data(#"[{"id":123456789,"name":"Synthetic release","tag_name":"v1.0.0","html_url":"https://github.com/example/ai-hub/releases/tag/v1.0.0","published_at":"2026-10-17T08:00:00Z","prerelease":false,"draft":false},{"id":123456790,"name":"Synthetic preview","tag_name":"v1.1.0-beta","html_url":"https://github.com/example/ai-hub/releases/tag/v1.1.0-beta","published_at":"2026-10-18T08:00:00Z","prerelease":true,"draft":false}]"#.utf8)
         return .init(releases: try GitHubClient.decode(data), etag: "fixture-etag", retryAfter: now.addingTimeInterval(1800))

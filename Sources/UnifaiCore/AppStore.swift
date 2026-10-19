@@ -10,6 +10,10 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var refreshingRepositories: Set<UUID> = []
     @Published public private(set) var loadFailure: String?
     @Published public var notice: String?
+    @Published public private(set) var rates: RateTable?
+    @Published public private(set) var refreshingRates = false
+    public typealias RateLoader = ([String], Date, Date) async throws -> RateTable
+    private let rateLoader: RateLoader
     public let repository: StateRepository
     private let vault: CredentialVault
     private let balances: BalanceLoader
@@ -17,8 +21,10 @@ public final class AppStore: ObservableObject {
 
     public init(repository: StateRepository, vault: CredentialVault = KeychainVault(),
                 balances: @escaping BalanceLoader = { try await BalanceClient().fetch(integrationID: $0, credential: $1, now: $2) },
-                releases: @escaping ReleaseLoader = { try await GitHubClient().fetch($0, now: $1) }) {
-        self.repository = repository; self.vault = vault; self.balances = balances; self.releases = releases
+                releases: @escaping ReleaseLoader = { try await GitHubClient().fetch($0, now: $1) },
+                rates rateLoader: @escaping RateLoader = { try await ExchangeRates.fetch(currencies: $0, since: $1, now: $2) }) {
+        self.repository = repository; self.vault = vault; self.balances = balances; self.releases = releases; self.rateLoader = rateLoader
+        self.rates = RateStore(directory: repository.directory).load()
         do { state = try repository.load() }
         catch { loadFailure = "Could not load saved data: \(error.localizedDescription) Restore state.json from a backup, then restart. The original file has been preserved; saving is disabled." }
     }
@@ -205,6 +211,31 @@ public final class AppStore: ObservableObject {
     /// Marks an automatically recorded renewal as confirmed by the user.
     public func confirmPayment(_ id: UUID) throws {
         try change { next in if let index = next.payments.firstIndex(where: { $0.id == id }) { next.payments[index].scheduleID = nil } }
+    }
+
+    /// Chooses the currency for combined spending views, or nil for separate currencies.
+    public func setDisplayCurrency(_ currency: String?) async {
+        do { try change { $0.displayCurrency = currency } } catch { notice = error.localizedDescription; return }
+        await refreshRatesIfNeeded()
+    }
+
+    /// Downloads ECB reference rates when combining currencies and the cached table is missing
+    /// a currency, does not reach back to the oldest payment, or is more than a day old.
+    public func refreshRatesIfNeeded(now: Date = .now) async {
+        guard let target = state.displayCurrency, !refreshingRates else { return }
+        let needed = Set(state.payments.map(\.money.currency) + [target]).filter { $0 != "EUR" && Money.validCurrency($0) }
+        guard !needed.isEmpty, let oldest = state.payments.map(\.paidAt).min() else { return }
+        if let table = rates, needed.isSubset(of: Set(table.currencies)), now.timeIntervalSince(table.fetchedAt) < 86400,
+           let first = table.rates.keys.min(), first <= RateTable.dayFormatter.string(from: oldest.addingTimeInterval(-7 * 86400)) { return }
+        refreshingRates = true
+        defer { refreshingRates = false }
+        do {
+            let table = try await rateLoader(needed.sorted(), oldest, now)
+            try? RateStore(directory: repository.directory).save(table)
+            rates = table
+        } catch {
+            if rates == nil { notice = "Could not download exchange rates, so currencies stay separate for now. \(Self.safeError(error))" }
+        }
     }
 
     public func dismissSuggestion(_ id: String) throws {

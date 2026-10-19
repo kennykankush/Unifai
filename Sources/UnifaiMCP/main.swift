@@ -83,7 +83,7 @@ func callTool(_ name: String, _ arguments: [String: Any]) throws -> Data {
     let encoder = AgentReport.encoder()
     switch name {
     case "get_overview":
-        return try encoder.encode(AgentReport.overview(state))
+        return try encoder.encode(AgentReport.overview(state, rates: RateStore(directory: repository.directory).load()))
     case "get_balances":
         return try encoder.encode(AgentReport.balances(state, provider: arguments["provider"] as? String))
     case "get_spending":
@@ -93,7 +93,7 @@ func callTool(_ name: String, _ arguments: [String: Any]) throws -> Data {
             since = date
         }
         let limit = min(200, max(0, (arguments["limit"] as? NSNumber)?.intValue ?? 20))
-        return try encoder.encode(AgentReport.spending(state, since: since, limit: limit))
+        return try encoder.encode(AgentReport.spending(state, since: since, limit: limit, rates: RateStore(directory: repository.directory).load()))
     case "get_renewals":
         return try encoder.encode(AgentReport.renewals(state, withinDays: (arguments["within_days"] as? NSNumber)?.intValue))
     default:

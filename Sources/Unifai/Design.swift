@@ -286,7 +286,7 @@ struct SectionHeading<Trailing: View>: View {
     @ViewBuilder var trailing: () -> Trailing
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(.system(size: 17, weight: .bold)).tracking(-0.2)
+            Text(title).font(.system(size: 17, weight: .bold)).tracking(-0.2).lineLimit(1).fixedSize()
             if let subtitle { Text(subtitle).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary) }
             Spacer(minLength: 8)
             trailing()

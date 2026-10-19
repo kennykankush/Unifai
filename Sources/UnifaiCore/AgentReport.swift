@@ -54,6 +54,9 @@ public enum AgentReport {
 
     public struct Spending: Codable, Equatable {
         public var paidTotals: [Amount]
+        /// All payments in the user's display currency at ECB rates on each payment date. Approximate.
+        public var paidTotalConverted: Amount?
+        public var conversionNote: String?
         public var since: Date?
         public var coverage: String
         public var historyConfirmedComplete: Bool
@@ -75,6 +78,8 @@ public enum AgentReport {
         public var generatedAt: Date
         public var balances: [Balance]
         public var paidTotals: [Amount]
+        public var paidTotalConverted: Amount?
+        public var conversionNote: String?
         public var paymentCoverage: String
         public var upcomingRenewals: [Renewal]
         public var accountsNeedingAttention: [String]
@@ -124,10 +129,24 @@ public enum AgentReport {
         }
     }
 
-    public static func spending(_ state: PersistentState, since: Date? = nil, limit: Int = 20) -> Spending {
+    static func converted(_ state: PersistentState, rates: RateTable?, since: Date? = nil) -> (Amount?, String?) {
+        guard let target = state.displayCurrency, let rates else { return (nil, nil) }
+        var scoped = state
+        if let since { scoped.payments = state.payments.filter { $0.paidAt >= since } }
+        let result = scoped.payments(in: target, rates: rates)
+        guard let total = Ledger.paidTotals(result.converted).first else { return (nil, nil) }
+        var note = "Every payment converted to \(target) at the European Central Bank reference rate for its date. Approximate: card issuers use their own rates. Recorded amounts are unchanged."
+        if !result.unconverted.isEmpty { note += " \(result.unconverted.count) payment(s) in currencies without a reference rate are excluded." }
+        return (Amount(total), note)
+    }
+
+    public static func spending(_ state: PersistentState, since: Date? = nil, limit: Int = 20, rates: RateTable? = nil) -> Spending {
+        let converted = converted(state, rates: rates, since: since)
         let records = state.payments.filter { since == nil || $0.paidAt >= since! }.sorted { $0.paidAt > $1.paidAt }
         return Spending(
             paidTotals: Ledger.paidTotals(state.payments, since: since).map(Amount.init),
+            paidTotalConverted: converted.0,
+            conversionNote: converted.1,
             since: since ?? state.coverageStart,
             coverage: state.coverageDescription,
             historyConfirmedComplete: state.historyCoverage?.completeForPeriod == true,
@@ -150,12 +169,15 @@ public enum AgentReport {
         }
     }
 
-    public static func overview(_ state: PersistentState, now: Date = .now) -> Overview {
+    public static func overview(_ state: PersistentState, now: Date = .now, rates: RateTable? = nil) -> Overview {
         let balances = balances(state, now: now)
+        let converted = converted(state, rates: rates)
         return Overview(
             generatedAt: now,
             balances: balances,
             paidTotals: Ledger.paidTotals(state.payments).map(Amount.init),
+            paidTotalConverted: converted.0,
+            conversionNote: converted.1,
             paymentCoverage: state.coverageDescription,
             upcomingRenewals: renewals(state, withinDays: 30, now: now),
             accountsNeedingAttention: balances.filter { $0.lastError != nil || $0.stale }.map { "\($0.provider) · \($0.label)" },

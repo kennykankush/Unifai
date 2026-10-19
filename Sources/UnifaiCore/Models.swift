@@ -282,6 +282,8 @@ public struct PersistentState: Codable, Equatable {
     public var githubRequests: [Date]?
     public var githubBackoffUntil: Date?
     public var dismissedSuggestions: [String]?
+    /// Currency used to combine spending views. Nil shows each currency separately.
+    public var displayCurrency: String?
     public init() {}
 }
 

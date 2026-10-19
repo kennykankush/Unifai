@@ -35,7 +35,7 @@ struct UnifaiApp: App {
         if fixtureMode {
             let vault = MemoryVault()
             model = AppStore(repository: repository, vault: vault,
-                             balances: FixtureWorkspace.balance, releases: FixtureWorkspace.releases)
+                             balances: FixtureWorkspace.balance, releases: FixtureWorkspace.releases, rates: FixtureWorkspace.rates)
             if !args.contains("--fixture-empty"), Bundle.main.object(forInfoDictionaryKey: "UnifaiFixtureEmpty") as? Bool != true, model.loadFailure == nil {
                 do { try FixtureWorkspace.prepare(model, vault: vault) }
                 catch { model.notice = "Fixture setup failed: \(error.localizedDescription)" }
@@ -136,7 +136,8 @@ struct MenuPanel: View {
     @EnvironmentObject private var store: AppStore
     let fixtureMode: Bool
     var body: some View {
-        let totals = Ledger.paidTotals(store.state.payments)
+        let combined = store.state.displayCurrency.flatMap { target in store.rates.map { Ledger.paidTotals(store.state.payments(in: target, rates: $0).converted) } }
+        let totals = combined ?? Ledger.paidTotals(store.state.payments)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 AppMark(size: 24)
