@@ -56,7 +56,7 @@ struct AccountEditor: View {
                     Text(localToolText).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(SignIn.title(integration.id)) { startSignIn() }.disabled(signingIn)
-                        if signingIn { ProgressView().controlSize(.small) }
+                        if signingIn { Spinner(size: .small) }
                         if let signInStatus { Text(signInStatus).font(.caption).foregroundStyle(.secondary) }
                     }
                 } footer: { Text("Already signed in to \(integration.id == "codex" ? "Codex" : integration.id == "azure-subscription" ? "the Azure CLI" : "Claude Code")? Skip this and add the account.") }

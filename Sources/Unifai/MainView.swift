@@ -630,7 +630,7 @@ struct MainView: View {
                 .disabled(store.loadFailure != nil || !store.state.accounts.contains { $0.mode == .live } || !store.refreshingAccounts.isEmpty)
             Button { editor = .subscription(nil) } label: { Label("Add Renewal", systemImage: "calendar.badge.plus") }.buttonStyle(PillButtonStyle())
             Button { editor = .repository } label: { Label("Follow Repo", systemImage: "shippingbox") }.buttonStyle(PillButtonStyle())
-            if !store.refreshingAccounts.isEmpty { ProgressView().controlSize(.small) }
+            if !store.refreshingAccounts.isEmpty { Spinner(size: .small) }
         }
     }
 
@@ -916,7 +916,7 @@ struct MainView: View {
                     if account.mode == .live {
                         Button { Task { await store.refreshAccount(account.id) } } label: {
                             HStack(spacing: 6) {
-                                if store.refreshingAccounts.contains(account.id) { ProgressView().controlSize(.mini) }
+                                if store.refreshingAccounts.contains(account.id) { Spinner() }
                                 else { Image(systemName: "arrow.clockwise") }
                                 Text("Refresh")
                             }
@@ -928,7 +928,7 @@ struct MainView: View {
                     if SignIn.supports(account.integrationID) {
                         Button { signIn(account) } label: {
                             HStack(spacing: 6) {
-                                if signingIn.contains(account.id) { ProgressView().controlSize(.mini) } else { Image(systemName: "person.crop.circle.badge.checkmark") }
+                                if signingIn.contains(account.id) { Spinner() } else { Image(systemName: "person.crop.circle.badge.checkmark") }
                                 Text("Sign In")
                             }
                         }
@@ -1345,7 +1345,7 @@ struct MainView: View {
                         Spacer()
                         Button(action: checkNow) {
                             HStack(spacing: 6) {
-                                if store.refreshingTimeline { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+                                if store.refreshingTimeline { Spinner() } else { Image(systemName: "arrow.clockwise") }
                                 Text("Check Now")
                             }
                         }

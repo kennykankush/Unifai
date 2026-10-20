@@ -443,3 +443,11 @@ final class NewsAndModelsTests: XCTestCase {
         XCTAssertTrue(NewModels.events(Data("not json".utf8), accounts: [], now: now).isEmpty)
     }
 }
+
+final class ForwardCompatibilityTests: XCTestCase {
+    func testUnknownEventKindsFromANewerVersionStillLoad() throws {
+        let json = #"{"schemaVersion":1,"accounts":[],"payments":[],"subscriptions":[],"repositories":[],"events":[{"id":"x","date":0,"kind":"Something new","title":"t","detail":"","sourceName":"s","important":false}]}"#
+        let state = try JSONDecoder().decode(PersistentState.self, from: Data(json.utf8))
+        XCTAssertEqual(state.events?.first?.kind, .news)
+    }
+}

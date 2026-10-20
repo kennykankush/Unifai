@@ -62,7 +62,7 @@ struct WalletDetail: View {
                     if account.mode == .live {
                         Button { Task { await store.refreshAccount(account.id) } } label: {
                             HStack(spacing: 6) {
-                                if store.refreshingAccounts.contains(account.id) { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+                                if store.refreshingAccounts.contains(account.id) { Spinner() } else { Image(systemName: "arrow.clockwise") }
                                 Text("Refresh")
                             }
                         }

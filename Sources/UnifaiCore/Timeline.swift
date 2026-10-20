@@ -15,6 +15,12 @@ public enum TimelineKind: String, Codable, CaseIterable {
     case model = "New model"
 
     public var isAccountEvent: Bool { [.earlyReset, .reset, .limitReached, .resetCredit, .anomaly, .recorded].contains(self) }
+
+    /// Kinds added by a newer version read as News, so an older app or MCP server can still load the file.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TimelineKind(rawValue: raw) ?? .news
+    }
 }
 
 public struct TimelineEvent: Codable, Identifiable, Hashable {

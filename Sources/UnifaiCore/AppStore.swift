@@ -349,9 +349,10 @@ public final class AppStore: ObservableObject {
     public func refreshAccount(_ id: UUID, now: Date = .now) async {
         guard let index = state.accounts.firstIndex(where: { $0.id == id }), state.accounts[index].mode == .live,
               !refreshingAccounts.contains(id), loadFailure == nil else { return }
-        if let attempt = state.accounts[index].lastAttempt, now.timeIntervalSince(attempt) < 60 {
-            notice = "Wait one minute between balance refreshes for this account."; return
-        }
+        // A reading from the last minute is already current: skip quietly rather than interrupt.
+        // After a failure, allow a retry after ten seconds.
+        if let attempt = state.accounts[index].lastAttempt,
+           now.timeIntervalSince(attempt) < (state.accounts[index].lastError == nil ? 60 : 10) { return }
         closePayAsYouGoPeriods(now: now)
         refreshingAccounts.insert(id)
         defer { refreshingAccounts.remove(id) }

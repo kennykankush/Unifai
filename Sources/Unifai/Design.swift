@@ -1008,3 +1008,22 @@ extension WindowDragArea.DragView {
         }
     }
 }
+
+/// AppKit's spinner. It animates on its own layer, so a refresh in progress does not make SwiftUI
+/// re-lay out the page every frame the way an animated SwiftUI view would.
+struct Spinner: NSViewRepresentable {
+    var size: NSControl.ControlSize = .mini
+    func makeNSView(context: Context) -> NSProgressIndicator {
+        let view = NSProgressIndicator()
+        view.style = .spinning
+        view.controlSize = size
+        view.isIndeterminate = true
+        view.usesThreadedAnimation = true
+        view.startAnimation(nil)
+        return view
+    }
+    func updateNSView(_ view: NSProgressIndicator, context: Context) {}
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSProgressIndicator, context: Context) -> CGSize? {
+        size == .mini ? CGSize(width: 10, height: 10) : CGSize(width: 16, height: 16)
+    }
+}

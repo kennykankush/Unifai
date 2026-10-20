@@ -103,23 +103,16 @@ struct Billboard<Accessory: View>: View {
         }
     }
 
-    /// Page marks: the current face's mark fills linearly over its dwell time.
+    /// Page marks; the current face's mark is wider. Static on purpose: a per-frame progress fill made
+    /// SwiftUI lay out the whole page thirty times a second.
     private var pager: some View {
         HStack(spacing: 5) {
             ForEach(Array(faces.enumerated()), id: \.element.id) { position, item in
                 Button { if position != index { select(position) } } label: {
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.32))
-                        if position == index {
-                            TimelineView(.animation(minimumInterval: 1 / 30, paused: hovering || reduceMotion)) { context in
-                                let progress = hovering || reduceMotion ? 1 : min(1, max(0, context.date.timeIntervalSince(cycleStart) / Self.dwell))
-                                Capsule().fill(Color.white).frame(width: max(6, 24 * progress))
-                            }
-                        }
-                    }
-                    .frame(width: position == index ? 24 : 6, height: 6)
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
+                    Capsule().fill(Color.white.opacity(position == index ? 0.95 : 0.35))
+                        .frame(width: position == index ? 20 : 6, height: 6)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(item.title)
