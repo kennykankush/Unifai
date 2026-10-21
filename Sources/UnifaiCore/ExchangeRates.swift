@@ -113,17 +113,7 @@ public extension PersistentState {
 
     func monthToDateSpend(in currency: String, rates: RateTable?, now: Date = .now, includeAccruing: Bool = false) -> (spent: Money, complete: Bool) {
         guard let start = Calendar.current.dateInterval(of: .month, for: now)?.start else { return (Money(0, currency), true) }
-        var total: Decimal = 0, complete = true
-        if includeAccruing {
-            for (_, amount) in accruingThisMonth(now: now) {
-                if let money = amount.currency == currency ? amount : rates?.convert(amount, to: currency, on: now) { total += money.amount } else { complete = false }
-            }
-        }
-        for payment in payments where payment.paidAt >= start && payment.paidAt <= now {
-            let money = payment.money.currency == currency ? payment.money : rates?.convert(payment.money, to: currency, on: payment.paidAt)
-            guard let money else { complete = false; continue }
-            total += payment.kind == .refund ? -money.amount : money.amount
-        }
-        return (Money(total, currency), complete)
+        let result = spendingBreakdown(in: currency, rates: rates, since: start, includeAccruing: includeAccruing, now: now)
+        return (result.total, result.complete)
     }
 }

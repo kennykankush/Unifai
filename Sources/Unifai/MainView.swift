@@ -26,10 +26,12 @@ enum Destination: String, CaseIterable, Identifiable {
 }
 
 enum Editor: Identifiable {
-    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage, settings, wallet(UUID)
+    case account(Integration, ConnectedAccount?), payment(PaymentRecord?), subscription(SubscriptionSchedule?), repository, coverage, settings, wallet(UUID), breakdown(Bool, String), backups
     var id: String {
         switch self {
         case .wallet(let id): return "wallet-\(id)"
+        case .breakdown(let month, let currency): return "breakdown-\(month)-\(currency)"
+        case .backups: return "backups"
         case .account(let integration, let account): return "account-\(integration.id)-\(account?.id.uuidString ?? "new")"
         case .payment(let record): return "payment-\(record?.id.uuidString ?? "new")"
         case .subscription(let record): return "subscription-\(record?.id.uuidString ?? "new")"
@@ -67,7 +69,10 @@ struct MainView: View {
         ZStack(alignment: .top) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if let error = store.loadFailure { InlineNotice(text: error).padding(.bottom, 18) }
+                    if let error = store.loadFailure {
+                        InlineNotice(text: error)
+                        Button("Review Local Backups") { editor = .backups }.padding(.bottom, 18)
+                    }
                     page
                     footer
                 }
@@ -117,6 +122,10 @@ struct MainView: View {
             AppRuntime.openSettings = { editor = .settings }
             AppRuntime.navigate = { destination = $0 }
             if let wallet = AppRuntime.initialWallet { AppRuntime.initialWallet = nil; editor = .wallet(wallet) }
+            if AppRuntime.channel != "release", let index = CommandLine.arguments.firstIndex(of: "--test-breakdown"),
+               CommandLine.arguments.indices.contains(index + 1) {
+                editor = .breakdown(CommandLine.arguments[index + 1] == "month", activeCurrency)
+            }
             AppRuntime.scheduleTestClick()
         }
         .sheet(item: $editor) { item in
@@ -128,6 +137,8 @@ struct MainView: View {
             case .coverage: CoverageEditor()
             case .settings: SettingsEditor()
             case .wallet(let id): WalletDetail(accountID: id)
+            case .breakdown(let month, let currency): SpendingBreakdownView(monthOnly: month, currency: currency)
+            case .backups: BackupsView()
             }
         }
         .alert("Unifai", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
@@ -526,8 +537,8 @@ struct MainView: View {
         let currency = activeCurrency
         let calendar = Calendar.current
         let pending = accruing(in: currency)
-        let paid = Ledger.paidTotals(spendPayments).first { $0.currency == currency }?.amount ?? 0
-        let total: Money? = paid + pending > 0 ? Money((paid + pending).rounded2, currency) : nil
+        let explanation = store.state.spendingBreakdown(in: currency, rates: combining ? store.rates : nil)
+        let total: Money? = explanation.total.amount > 0 ? Money(explanation.total.amount.rounded2, currency) : nil
         let month = store.state.monthToDateSpend(in: currency, rates: combining ? store.rates : nil, includeAccruing: true).spent
         let points = SpendSeries.cumulative(spendPayments, currency: currency, start: store.state.coverageStart)
 
@@ -574,11 +585,12 @@ struct MainView: View {
                       caption: pending > 0 ? "Includes \(Money(pending.rounded2, currency).plainText) of pay-as-you-go usage this month" : (conversionCaption ?? store.state.coverageDescription),
                       chip: month.amount > 0 ? "+\(month.amountText) this month" : nil,
                       visual: points.count > 2 ? AnyView(Sparkline(points: points).frame(width: 200, height: 84)) : nil,
-                      footer: AnyView(heroThisMonth)),
+                      footer: AnyView(heroThisMonth),
+                      inspect: { editor = .breakdown(false, currency) }, inspectMonth: { editor = .breakdown(true, currency) }),
             BoardFace(id: "month", title: "Spent in \(Date.now.formatted(.dateTime.month(.wide)))", symbol: "calendar", value: month.amount > 0 ? month : nil, empty: "Nothing yet",
                       colors: [Palette.hex(0x0E4A3C), Palette.hex(0x14805F), Palette.hex(0x9DBF2A)], caption: comparison,
                       visual: AnyView(MiniMonthBars(values: months, labels: starts.map { $0.formatted(.dateTime.month(.narrow)) })),
-                      footer: AnyView(heroThisMonth)),
+                      footer: AnyView(heroThisMonth), inspect: { editor = .breakdown(true, currency) }),
             BoardFace(id: "credit", title: "Credit remaining", symbol: "wallet.pass.fill", value: credit > 0 ? Money(credit.rounded2, currency) : nil, empty: "No prepaid credit",
                       colors: [Palette.hex(0x1A2F9E), Palette.hex(0x3D5BFF), Palette.hex(0x3FC1FF)], caption: creditCaption,
                       visual: counted.isEmpty ? nil : AnyView(LogoStack(ids: counted.map(\.0.integrationID), size: 40).padding(.bottom, 6))),

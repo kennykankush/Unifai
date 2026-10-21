@@ -293,11 +293,23 @@ public struct PaymentRecord: Codable, Identifiable, Hashable {
     public var scheduleID: UUID?
     /// Recorded by Unifai from a pay-as-you-go wallet's last usage reading at period end.
     public var estimated: Bool?
+    /// Kept after confirmation so the original observation remains inspectable.
+    public var detection: TopUpEvidence?
+    public var confirmedAt: Date?
+    public var sourceReference: String?
     public var autoRecorded: Bool { scheduleID != nil || estimated == true }
     public init(id: UUID = UUID(), accountID: UUID? = nil, description: String, kind: PaymentKind, money: Money, paidAt: Date, reference: String = "", scheduleID: UUID? = nil) {
         self.id = id; self.accountID = accountID; self.description = description; self.kind = kind
         self.money = money; self.paidAt = paidAt; self.reference = reference; self.createdAt = .now; self.scheduleID = scheduleID
     }
+}
+
+public struct TopUpEvidence: Codable, Hashable {
+    public var before: Money
+    public var after: Money
+    public var observedFrom: Date
+    public var observedThrough: Date
+    public var lowerBound: Bool
 }
 
 public enum BillingCadence: String, Codable, CaseIterable, Identifiable {

@@ -56,7 +56,7 @@ import UnifaiCore
 
         // Budget: 80% and 100%, once per month each.
         if let budget = state.monthlyBudget, budget.amount > 0 {
-            let spent = state.monthToDateSpend(in: budget.currency, rates: store.rates).spent
+            let spent = state.monthToDateSpend(in: budget.currency, rates: store.rates, includeAccruing: true).spent
             let ratio = NSDecimalNumber(decimal: spent.amount / budget.amount).doubleValue
             let month = Date.now.formatted(.iso8601.year().month())
             for (level, title) in [(1.0, "You have reached your AI budget"), (0.8, "80% of your AI budget is used")] where ratio >= level {

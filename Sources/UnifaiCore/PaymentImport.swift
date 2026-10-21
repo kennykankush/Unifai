@@ -16,6 +16,7 @@ public enum PaymentImport {
         public var kind: PaymentKind
         public var integrationID: String?
         public var accountLabel: String
+        public var accountLabelSpecified: Bool = false
         public var reference: String
     }
 
@@ -66,7 +67,8 @@ public enum PaymentImport {
             // Noon local time keeps the calendar day stable across time zones.
             rows.append(Row(line: line, paidAt: day.addingTimeInterval(12 * 3600), description: name.isEmpty ? "Imported payment" : name,
                             money: Money(number, code), kind: paymentKind, integrationID: integration,
-                            accountLabel: value(label).isEmpty ? "Personal" : value(label), reference: value(reference)))
+                            accountLabel: value(label).isEmpty ? "Personal" : value(label),
+                            accountLabelSpecified: !value(label).isEmpty, reference: value(reference)))
         }
         guard !rows.isEmpty else { throw ValidationError.message("The file has a header but no payments.") }
         return rows

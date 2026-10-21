@@ -54,6 +54,7 @@ final class PayAsYouGoTests: XCTestCase {
         let summary = try store.importPayments(try PaymentImport.parse(invoice), now: day("2026-11-04"))
         XCTAssertEqual(summary.replaced, 1)
         XCTAssertEqual(store.state.payments.map(\.reference), ["INV-10"])
+        XCTAssertTrue(store.closePayAsYouGoPeriods(now: day("2026-11-05")).isEmpty, "A reconciled invoice must not recreate the estimate")
     }
 
     func testRefreshInANewMonthClosesThePreviousMonthFirst() async throws {

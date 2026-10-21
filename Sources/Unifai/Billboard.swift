@@ -13,6 +13,8 @@ struct BoardFace: Identifiable {
     var chip: String?
     var visual: AnyView?
     var footer: AnyView?
+    var inspect: (() -> Void)?
+    var inspectMonth: (() -> Void)?
 }
 
 /// The Overview hero as a billboard: it rolls between faces (total spent, this month, credit left) like a
@@ -126,18 +128,29 @@ struct Billboard<Accessory: View>: View {
     private func content(_ face: BoardFace) -> some View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
-                if let value = face.value { MoneyText(money: value, size: 46, weight: .heavy) }
+                if let value = face.value {
+                    if let inspect = face.inspect {
+                        Button(action: inspect) { MoneyText(money: value, size: 46, weight: .heavy) }
+                            .buttonStyle(.plain).help("Show the payments and usage behind this total")
+                            .accessibilityLabel("\(face.title): \(value.plainText). Show breakdown")
+                    } else { MoneyText(money: value, size: 46, weight: .heavy) }
+                }
                 else { Text(face.empty).font(.system(size: 38, weight: .heavy)).tracking(-1) }
                 HStack(spacing: 8) {
                     if let chip = face.chip {
-                        Text(chip).font(.system(size: 12, weight: .bold)).monospacedDigit()
+                        Button { face.inspectMonth?() } label: { Text(chip).font(.system(size: 12, weight: .bold)).monospacedDigit()
                             .foregroundStyle(Palette.hex(0x15161B))
                             .padding(.horizontal, 9).frame(height: 24)
                             .background(Capsule().fill(Palette.lime))
+                        }.buttonStyle(.plain).disabled(face.inspectMonth == nil).help("Show this month's breakdown")
                     }
                     Text(face.caption).font(.system(size: 12, weight: .medium)).opacity(0.8).lineLimit(2)
                 }
                 if let footer = face.footer { footer }
+                if let inspect = face.inspect {
+                    Button(action: inspect) { Label("View breakdown", systemImage: "list.bullet") }
+                        .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).opacity(0.9)
+                }
             }
             Spacer(minLength: 16)
             if let visual = face.visual { visual }

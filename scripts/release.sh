@@ -70,6 +70,9 @@ step "Signing with Developer ID (hardened runtime)"
 bash scripts/sign-app.sh "$app" "$identity" --release
 codesign --verify --strict --verbose=2 "$app"
 
+step "Checking the packaged MCP server"
+python3 scripts/check-mcp.py "$app/Contents/MacOS/unifai-mcp"
+
 package() { rm -f "$zip"; ditto -c -k --keepParent "$app" "$zip"; }
 package
 

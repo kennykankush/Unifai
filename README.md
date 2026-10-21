@@ -78,6 +78,12 @@ The catalogue separates implemented connectors, manual records and planned capab
 
 Top-ups you forget to log are caught too. When OpenRouter's total of purchased credits rises between two readings, Unifai records the purchase as an **Estimate**, including OpenRouter's 5.5% card fee (0.80 minimum); a rise in DeepSeek's purchased balance is recorded as a lower bound. Importing the receipt replaces the Estimate.
 
+Click an Overview spending amount, its **this month** chip, or **View breakdown** to see the contributing entries. Confirmed payments, estimates, automatic renewals and usage not yet invoiced have separate subtotals. Converted entries show the original amount and the reference rate used. Entries without a rate remain visible but are excluded from the total.
+
+You can **Confirm** or **Edit** a detected payment inside its wallet as well as on the Payments page. New detections retain their before-and-after balance readings after confirmation. Older entries may not have this evidence.
+
+Receipt imports replace at most one matching estimate per receipt. If the match is ambiguous, nothing in that import is saved. Edit the matching estimate with the receipt's amount, date and reference, then import again. When you have several wallets for one provider, include **account_label** in the CSV.
+
 Auto renewals, detected top-ups and month-end usage estimates stay marked until a receipt confirms them. While any remain, **Payments** shows a **Close the books** banner with an **Unconfirmed** filter. **Copy Receipt Request** copies a prompt for an agent with mail access: it lists each entry and asks for a CSV in the import format. On the first three days of a month, a notification reminds you if last month still has unconfirmed entries.
 
 In **Payments**, record settled charges using a positive amount and an ISO currency code such as USD or CNY. Choose **Refund** to reduce the paid total. A receipt reference detects duplicates within the same account. Edit or remove records through their row controls; removals require confirmation.
@@ -159,8 +165,20 @@ The white **Agent access** button in the app's top bar copies the exact setup li
 | `get_renewals` | Expected renewals with amount, cadence and days until due. Optional `within_days` |
 | `get_headroom` | Live wallets ranked by usable capacity now, with a one-line recommendation, reset times, free resets and the budget. For agents choosing where to run heavy work |
 | `get_timeline` | Recent events: resets, limits, free resets, cost spikes, incidents, releases and posts. Optional `kinds`, `since` and `limit` |
+| `get_spending_breakdown` | Dashboard arithmetic, entries, confirmation states, conversions and per-account subtotals. Defaults to this month; supports `period: "all"`, `since`, `through`, `currency`, `account_id`, `include_accruing`, `limit` and `offset` |
+| `get_payment` | One payment's status, receipt reference and retained top-up evidence. Requires `payment_id` |
+| `get_unconfirmed_payments` | Estimates and automatic renewals awaiting confirmation, totals per currency and a receipt-search prompt. Supports `account_id`, `limit` and `offset` |
+| `get_account_details` | One wallet's reading, coverage, recent payments, renewals and available cloud service/resource costs. Requires `account_id`; optional payment `limit` |
+| `get_renewal_outlook` | Expected charges over the next 1–366 days, with overdue schedules separated. Optional `within_days`, `currency` and `account_id` |
+| `get_data_health` | Missing, stale, failed and manual wallets; history completeness; unconfirmed counts; exchange-rate age; and budget usage |
 
-The server re-reads `state.json` on every call. It never opens Keychain, never sends network requests and never writes. Balances are as fresh as the last **Refresh** in the app; each reading carries `observedAt` and `stale`. Amounts are decimal strings with their currency, and no measure is summed across currencies or across credit, payments and renewals.
+The server re-reads `state.json` on every call. It never opens Keychain, sends network requests, confirms payments, restores backups or writes data. Balances are as fresh as the last **Refresh** in the app. Headroom recommendations exclude stale or failed readings from usable capacity and list accounts without measurable capacity separately.
+
+Every amount carries its currency. Original reports encode amounts as decimal strings; the detailed reports use JSON decimal numbers. Explicit converted totals name the target currency and explain the exchange-rate basis. Credit remaining, recorded payments, accruing usage and expected renewals stay separate.
+
+For “why is my total this much?”, call **get_spending_breakdown**, then **get_payment** with an entry's ID for its evidence. For “what will renew next month?”, call **get_renewal_outlook**. Use **get_data_health** before treating missing or stale data as a current answer.
+
+Breakdown and unconfirmed-payment pages return **totalEntries**, **offset** and **hasMore**. Totals cover all matching entries, even when the returned list is paginated. Date-only filters use the Mac's calendar; **through** includes that whole day. Current month-to-date usage is excluded from historical or partial-month ranges because it cannot be allocated reliably. Renewal projections use saved schedules and current reference rates; they do not forecast cloud usage or purchases.
 
 To use a different data directory, pass `--data-directory <path>` or set `UNIFAI_DATA_DIR`. For example, to try the server against synthetic data, run `.build/release/unifai-mcp --data-directory .qa/fixture-workspace`.
 
@@ -172,7 +190,11 @@ GitHub uses one conditional request per refresh, at most 10 repositories, a 30-m
 
 Normal data lives in `~/Library/Application Support/Unifai/state.json`. The file contains account metadata, readings, payment records, schedules and release caches, with mode `0600`. Credentials live separately in macOS Keychain, scoped by Unifai service and account UUID. The app does not enumerate other credentials, inspect browser sessions, or import local tool accounts.
 
-Quit Unifai before copying `state.json` for a backup. This file is local JSON, not encrypted storage. A JSON backup does not include Keychain credentials; enter replacement keys after moving to another Mac. If loading fails or the schema is newer, Unifai preserves the file and disables writes. Restore a valid backup and restart. Run one normal app process per data directory.
+Before changing existing saved data, Unifai creates local copies under **Backups** beside `state.json`. It keeps 30 recent versions and 14 daily checkpoints. Unchanged saves create no additional copies. If a backup cannot be written, the existing data is not overwritten.
+
+Open **Settings → Review Local Backups** to inspect and restore a copy. A restore preserves the displaced file, even if it is corrupt. Files preserved by an explicit restore are not automatically deleted. If the main data file cannot load, **Review Local Backups** is also available in the main window. Recovery waits until active refreshes finish.
+
+These are private local JSON files, not encrypted or off-device backups. They contain no Keychain credentials. Reconnect accounts whose keys are unavailable after recovery or moving to another Mac. Quit Unifai before making a separate manual copy, and run one normal app process per data directory.
 
 ## Try the synthetic workspace
 
@@ -188,10 +210,11 @@ Refresh its OpenRouter and DeepSeek accounts to see sample readings. In a fixtur
 
 ## Run the checks
 
-Run the offline suite; the two explicit integration checks are skipped by default:
+Run the offline suite; live integration checks are skipped by default:
 
 ```sh
 bash scripts/swift-local.sh test
+python3 scripts/check-mcp.py
 ```
 
 Opt in to the synthetic Keychain check and one anonymous public request to `swiftlang/swift` (add `UNIFAI_TEST_CODEX=1` or `UNIFAI_TEST_CLAUDE=1` to read the local Codex or Claude Code sign-in):
@@ -201,7 +224,7 @@ UNIFAI_TEST_KEYCHAIN=1 UNIFAI_TEST_PUBLIC_GITHUB=1 \
   bash scripts/swift-local.sh test
 ```
 
-The offline suite currently runs 85 tests, with 8 opt-in checks skipped. `UNIFAI_TEST_STATUS=1` reads the four public status pages and `UNIFAI_TEST_AZURE=1` runs a live Azure cost query. An earlier witnessed full run, with both integration checks enabled, passed 32 tests with no failures or skips. It retrieved 50 public GitHub releases in one request. Debug and optimized builds passed. [Native checks](evidence/VERIFICATION.md) covered empty state, account setup, both fixture balances, retained error readings, payments, schedules, catalogue search, releases, resizing and the companion.
+The offline suite currently discovers 118 tests, with 8 opt-in checks skipped. The MCP smoke check exercises all 12 tools through the stdio executable against disposable data and verifies that queries leave it unchanged. `UNIFAI_TEST_STATUS=1` reads the four public status pages and `UNIFAI_TEST_AZURE=1` runs a live Azure cost query. An earlier witnessed full run, with both integration checks enabled, passed 32 tests with no failures or skips. It retrieved 50 public GitHub releases in one request. Debug and optimized builds passed. [Native checks](evidence/VERIFICATION.md) covered empty state, account setup, both fixture balances, retained error readings, payments, schedules, catalogue search, releases, resizing and the companion.
 
 ## Release
 

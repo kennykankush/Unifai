@@ -327,7 +327,7 @@ final class TimelineTests: XCTestCase {
         record.reference = ""
         let text = state.receiptRequest(for: [record])
         XCTAssertTrue(text.contains("2026-10-05 · Claude subscription · Claude Max 20x · about 299.99 SGD") || text.contains("· Claude Max 20x · about 299.99 SGD"))
-        XCTAssertTrue(text.contains("date,description,amount,currency,kind,account,reference"))
+        XCTAssertTrue(text.contains("date,description,amount,currency,kind,account,account_label,reference"))
     }
 }
 
@@ -383,7 +383,7 @@ final class TopUpDetectionTests: XCTestCase {
         let account = ConnectedAccount(integrationID: "openrouter", label: "Dev", mode: .live)
         let now = Date()
         let manual = PaymentRecord(accountID: account.id, description: "OpenRouter", kind: .topUp, money: Money(Decimal(string: "10.80")!, "USD"), paidAt: now.addingTimeInterval(-86400))
-        XCTAssertTrue(TopUpWatch.payments(old: openRouter(purchased: 0, remaining: 0, at: now), new: openRouter(purchased: 10, remaining: 10, at: now),
+        XCTAssertTrue(TopUpWatch.payments(old: openRouter(purchased: 0, remaining: 0, at: now.addingTimeInterval(-2 * 86400)), new: openRouter(purchased: 10, remaining: 10, at: now),
                                           account: account, recorded: [manual], now: now).isEmpty)
         XCTAssertEqual(TopUpWatch.payments(old: openRouter(purchased: 0, remaining: 0, at: now), new: openRouter(purchased: 10, remaining: 10, at: now),
                                            account: account, recorded: [], now: now).first?.money, Money(Decimal(string: "10.80")!, "USD"))

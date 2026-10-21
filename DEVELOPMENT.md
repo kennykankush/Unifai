@@ -1,5 +1,29 @@
 # First local milestone
 
+This section records the October 19 milestone. Its deferred-work list is historical; see README.md for the current feature set.
+
+## October 21: payment reliability, recovery and agent explanations
+
+The local implementation adds one-to-one receipt reconciliation, observation-interval top-up matching, retained detection evidence, local backup recovery and a spending breakdown shared by the dashboard and MCP. Budget notifications now include accruing usage. Reconciled month-end invoices retain their source reference so the estimate is not recreated.
+
+The MCP server is version 0.3.0 and exposes 12 read-only tools. New queries explain spending, inspect payment evidence, list unconfirmed records, inspect an account, project scheduled renewals and report data freshness. Existing payment reports include stable IDs and confirmation status. Headroom excludes stale or failed readings from usable capacity.
+
+New code owners:
+
+| Area | Location |
+| --- | --- |
+| Shared spending arithmetic and contributing entries | Sources/UnifaiCore/SpendingBreakdown.swift |
+| Receipt matching | Sources/UnifaiCore/PaymentReconciliation.swift |
+| Rich read-only queries and argument validation | Sources/UnifaiCore/AgentTools.swift |
+| Native spending explanation and recovery sheets | Sources/Unifai/FinanceDetails.swift |
+| Stdio smoke check with disposable data | scripts/check-mcp.py |
+
+Verification: 110 tests passed, 8 opt-in checks skipped; debug and optimized builds passed. All 12 MCP tools passed the stdio smoke check. Native checks used a separate synthetic workspace for breakdown totals, keyboard dismissal, resizing, wallet confirmation/editing and backup restoration. Details are in [the verification receipt](evidence/reliability-2026-10-21.md).
+
+These changes ship in version 0.9.7. The real ledger and credentials were not modified during implementation or fixture verification.
+
+## October 19 record
+
 Status: functioning native milestone verified on 2026-10-19. Live authentication against Hadi’s provider accounts remains a setup step. The current development owner continued the existing scaffold through Herdr and the requested `gptgpt` launcher. The old built-in agent remains stopped; no additional agents were used.
 
 ## Implemented behavior

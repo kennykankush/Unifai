@@ -40,12 +40,13 @@ public final class AppStore: ObservableObject {
         self.hasXToken = ((try? vault.read(accountID: Self.xTokenID)) ?? nil) != nil
         self.rates = RateStore(directory: repository.directory).load()
         do { state = try repository.load() }
-        catch { loadFailure = "Could not load saved data: \(error.localizedDescription) Restore state.json from a backup, then restart. The original file has been preserved; saving is disabled." }
+        catch { loadFailure = "Could not load saved data: \(error.localizedDescription) Review Local Backups to recover a saved copy. The original file has been preserved; saving is disabled." }
     }
     func change(_ update: (inout PersistentState) throws -> Void) throws {
         guard loadFailure == nil else { throw ValidationError.message("Saving is disabled because the saved data could not be loaded.") }
         var next = state
         try update(&next)
+        guard next != state else { return }
         try repository.save(next)
         state = next
     }
@@ -148,8 +149,12 @@ public final class AppStore: ObservableObject {
             for row in rows {
                 var accountID: UUID?
                 if let integration = row.integrationID {
-                    if let existing = next.accounts.first(where: { $0.integrationID == integration && $0.label.caseInsensitiveCompare(row.accountLabel) == .orderedSame })
-                        ?? next.accounts.first(where: { $0.integrationID == integration }) {
+                    let sameProvider = next.accounts.filter { $0.integrationID == integration }
+                    let named = sameProvider.first { $0.label.caseInsensitiveCompare(row.accountLabel) == .orderedSame }
+                    if !row.accountLabelSpecified, sameProvider.count > 1 {
+                        throw ValidationError.message("Line \(row.line): more than one \(integration) wallet exists. Add account_label to choose the billing account. Nothing was imported.")
+                    }
+                    if let existing = row.accountLabelSpecified ? named : sameProvider.first {
                         accountID = existing.id
                     } else {
                         let created = ConnectedAccount(integrationID: integration, label: row.accountLabel, billingScope: "", mode: .manual)
@@ -160,36 +165,28 @@ public final class AppStore: ObservableObject {
                 }
                 let record = PaymentRecord(accountID: accountID, description: row.description, kind: row.kind, money: row.money, paidAt: row.paidAt, reference: row.reference)
                 let day = Calendar.current.startOfDay(for: row.paidAt)
-                // A real invoice supersedes Unifai's month-end usage estimate for that wallet.
-                if row.kind == .usageCharge, let accountID {
-                    let before = next.payments.count
-                    next.payments.removeAll { $0.estimated == true && $0.kind == .usageCharge && $0.accountID == accountID && $0.money.currency == row.money.currency
-                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 20 * 86400 }
-                    summary.replaced += before - next.payments.count
-                }
-                // A real top-up receipt supersedes a detected top-up for that wallet.
-                if row.kind == .topUp, let accountID {
-                    let before = next.payments.count
-                    next.payments.removeAll { $0.estimated == true && $0.kind == .topUp && $0.accountID == accountID && $0.money.currency == row.money.currency
-                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 7 * 86400 }
-                    summary.replaced += before - next.payments.count
-                }
-                // A real receipt supersedes the automatic entry for the same renewal.
-                if row.kind == .subscription, let accountID {
-                    let before = next.payments.count
-                    next.payments.removeAll { $0.autoRecorded && $0.accountID == accountID && $0.money.currency == row.money.currency
-                        && abs($0.paidAt.timeIntervalSince(row.paidAt)) <= 5 * 86400 }
-                    summary.replaced += before - next.payments.count
-                }
                 let duplicate = next.payments.contains { existing in
                     guard existing.accountID == accountID else { return false }
                     if !row.reference.isEmpty { return existing.reference.caseInsensitiveCompare(row.reference) == .orderedSame }
-                    return Calendar.current.startOfDay(for: existing.paidAt) == day && existing.money == row.money && existing.description == row.description
+                    return !existing.autoRecorded && Calendar.current.startOfDay(for: existing.paidAt) == day
+                        && existing.money == row.money && existing.description == row.description
                 }
                 if duplicate { summary.duplicates += 1; continue }
+                // Resolve at most one estimate. Check duplicates first so importing a receipt
+                // again cannot remove a subsequently detected purchase.
+                var confirmed = record
+                if let match = try PaymentReconciliation.match(record, in: next.payments) {
+                    confirmed.id = match.id
+                    confirmed.createdAt = match.createdAt
+                    confirmed.detection = match.detection
+                    confirmed.sourceReference = match.sourceReference ?? match.reference
+                    confirmed.confirmedAt = now
+                    next.payments.removeAll { $0.id == match.id }
+                    summary.replaced += 1
+                }
                 do { try Ledger.validate(record, existing: next.payments, now: now) }
                 catch { throw ValidationError.message("Line \(row.line): \(error.localizedDescription)") }
-                next.payments.append(record)
+                next.payments.append(confirmed)
                 summary.imported += 1
             }
         }
@@ -199,7 +196,14 @@ public final class AppStore: ObservableObject {
         try Ledger.validate(record, existing: state.payments, now: now)
         try validateAccount(record.accountID)
         try change { next in
-            if let index = next.payments.firstIndex(where: { $0.id == record.id }) { next.payments[index] = record }
+            if let index = next.payments.firstIndex(where: { $0.id == record.id }) {
+                var edited = record
+                edited.createdAt = next.payments[index].createdAt
+                edited.detection = next.payments[index].detection
+                edited.sourceReference = next.payments[index].sourceReference
+                edited.confirmedAt = now
+                next.payments[index] = edited
+            }
             else { next.payments.append(record) }
             if let coverage = next.historyCoverage, record.paidAt < coverage.start {
                 next.historyCoverage = .init(start: record.paidAt, completeForPeriod: false)
@@ -255,8 +259,22 @@ public final class AppStore: ObservableObject {
     /// Marks an automatically recorded payment as confirmed by the user.
     public func confirmPayment(_ id: UUID) throws {
         try change { next in
-            if let index = next.payments.firstIndex(where: { $0.id == id }) { next.payments[index].scheduleID = nil; next.payments[index].estimated = nil }
+            if let index = next.payments.firstIndex(where: { $0.id == id }), next.payments[index].autoRecorded {
+                next.payments[index].scheduleID = nil; next.payments[index].estimated = nil
+                next.payments[index].confirmedAt = .now
+            }
         }
+    }
+
+    public func restoreBackup(_ name: String) throws {
+        guard refreshingAccounts.isEmpty, refreshingRepositories.isEmpty, !refreshingTimeline, !refreshingRates else {
+            throw ValidationError.message("Wait for the current refresh to finish before restoring.")
+        }
+        let restored = try repository.restore(backup: name)
+        state = restored
+        loadFailure = nil
+        timelineErrors = [:]
+        notice = "Backup restored. The previous data file was preserved in Backups. Credentials stay in Keychain; reconnect any accounts that need a key."
     }
 
     /// For pay-as-you-go wallets whose last month-to-date reading belongs to an earlier month,
@@ -276,7 +294,7 @@ public final class AppStore: ObservableObject {
                     let monthName = period.start.formatted(.dateTime.month(.wide).year())
                     for spent in snapshot.reportedConsumption where spent.amount > 0 {
                         let reference = "auto-usage-\(account.id.uuidString.prefix(8))-\(period.start.formatted(.iso8601.year().month()))-\(spent.currency)"
-                        guard !next.payments.contains(where: { $0.reference == reference }) else { continue }
+                        guard !next.payments.contains(where: { $0.reference == reference || $0.sourceReference == reference }) else { continue }
                         let name = Catalogue.integration(account.integrationID)?.name ?? account.integrationID
                         var payment = PaymentRecord(accountID: account.id, description: "\(name) usage, \(monthName)", kind: .usageCharge, money: spent,
                                                     paidAt: min(period.end.addingTimeInterval(-60), now), reference: reference)

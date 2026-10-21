@@ -45,6 +45,9 @@ public enum AgentReport {
     }
 
     public struct Payment: Codable, Equatable {
+        public var id: String
+        public var accountID: String?
+        public var status: String
         public var description: String
         public var kind: String
         public var amount: Amount
@@ -146,6 +149,7 @@ public enum AgentReport {
     // MARK: Headroom
 
     public struct HeadroomItem: Codable, Equatable {
+        public var accountID: String
         public var provider: String
         public var providerID: String
         public var label: String
@@ -160,6 +164,7 @@ public enum AgentReport {
         public var spentThisMonth: [Amount]
         public var observedAt: Date?
         public var stale: Bool
+        public var lastError: String?
     }
 
     public struct Headroom: Codable, Equatable {
@@ -168,6 +173,7 @@ public enum AgentReport {
         /// Best first: plan allowances with room, then prepaid credit, then pay-as-you-go, then anything exhausted.
         public var ranked: [HeadroomItem]
         public var budget: Budget?
+        public var unmeasuredAccounts: [String]
         public var note: String
     }
 
@@ -206,39 +212,51 @@ public enum AgentReport {
                 let usable = !exhausted || credit != nil
                 let score = !exhausted ? 3 + Double(remaining) / 100 : credit != nil ? 1.8 : credits > 0 ? 0.5 : 0
                 scored.append((score, HeadroomItem(
+                    accountID: account.id.uuidString,
                     provider: provider, providerID: account.integrationID, label: account.label, kind: "allowance", usableNow: usable, summary: parts.joined(separator: "; "),
                     remainingPercent: remaining, nextReset: next, freeResets: credits > 0 ? credits : nil,
-                    creditRemaining: snapshot.balances.map(Amount.init), spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale)))
+                    creditRemaining: snapshot.balances.map(Amount.init), spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale, lastError: account.lastError)))
             } else if let balance = snapshot.balances.first {
                 let floor = account.lowBalanceAlert ?? ConnectedAccount.defaultLowBalance(for: balance.currency)
                 let usable = balance.amount > 0
                 scored.append((usable ? (balance.amount >= floor ? 2 : 1.2) : 0, HeadroomItem(
+                    accountID: account.id.uuidString,
                     provider: provider, providerID: account.integrationID, label: account.label, kind: "prepaid", usableNow: usable,
                     summary: "\(balance.plainText) credit left\(usable && balance.amount < floor ? ", below the low-balance alert" : "")",
                     remainingPercent: nil, nextReset: nil, freeResets: nil, creditRemaining: snapshot.balances.map(Amount.init),
-                    spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale)))
+                    spentThisMonth: [], observedAt: snapshot.observedAt, stale: stale, lastError: account.lastError)))
             } else if !snapshot.reportedConsumption.isEmpty, Catalogue.integration(account.integrationID)?.billing == .payAsYouGo {
                 let spent = snapshot.reportedConsumption.map(\.plainText).joined(separator: ", ")
                 scored.append((1, HeadroomItem(
+                    accountID: account.id.uuidString,
                     provider: provider, providerID: account.integrationID, label: account.label, kind: "payAsYouGo", usableNow: true,
                     summary: "Billed per use; \(spent) \(snapshot.consumptionPeriod?.lowercased() ?? "so far")",
                     remainingPercent: nil, nextReset: nil, freeResets: nil, creditRemaining: [],
-                    spentThisMonth: snapshot.reportedConsumption.map(Amount.init), observedAt: snapshot.observedAt, stale: stale)))
+                    spentThisMonth: snapshot.reportedConsumption.map(Amount.init), observedAt: snapshot.observedAt, stale: stale, lastError: account.lastError)))
             }
         }
-        let ranked = scored.sorted { $0.0 > $1.0 }.map(\.1)
+        for index in scored.indices where scored[index].1.stale || scored[index].1.lastError != nil {
+            scored[index].0 = -1
+            scored[index].1.usableNow = false
+            scored[index].1.summary = "Refresh needed; last reading: " + scored[index].1.summary
+        }
+        let ranked = scored.sorted { $0.0 == $1.0 ? $0.1.accountID < $1.1.accountID : $0.0 > $1.0 }.map(\.1)
+        let measured = Set(ranked.map(\.accountID))
+        let unmeasured = state.accounts.filter { !measured.contains($0.id.uuidString) }.map { accountName(state, $0.id) ?? $0.label }
         let budget = overview(state, now: now, rates: rates).budget
         var recommendation: String
         if let best = ranked.first(where: \.usableNow) {
             recommendation = "Use \(best.provider) (\(best.label)) first: \(best.summary)."
+        } else if ranked.contains(where: { $0.stale || $0.lastError != nil }) {
+            recommendation = "No fresh reading confirms available capacity. Refresh the affected wallets in Unifai."
         } else if let waiting = ranked.first {
             recommendation = "Nothing has room right now. \(waiting.provider): \(waiting.summary)."
         } else {
             recommendation = "No live wallets with readings. Connect or refresh accounts in the Unifai app."
         }
         if let budget, budget.percentUsed >= 100 { recommendation += " The monthly budget is used up; avoid pay-as-you-go." }
-        return Headroom(generatedAt: now, recommendation: recommendation, ranked: ranked, budget: budget,
-                        note: "Ranked from the app's last saved readings; check observedAt and stale. Allowances reset on the provider's schedule; free resets are redeemed in the provider's own app.")
+        return Headroom(generatedAt: now, recommendation: recommendation, ranked: ranked, budget: budget, unmeasuredAccounts: unmeasured,
+                        note: "Availability from saved readings, not a model-quality or task-compatibility recommendation. Stale or failed readings are not treated as usable now. Accounts without measurable capacity are listed separately. Free resets are redeemed in the provider's own app.")
     }
 
     // MARK: Timeline
@@ -284,12 +302,14 @@ public enum AgentReport {
             coverage: state.coverageDescription,
             historyConfirmedComplete: state.historyCoverage?.completeForPeriod == true,
             payments: records.prefix(max(0, limit)).map { record in
-                Payment(description: record.description, kind: record.kind.rawValue, amount: Amount(record.money),
+                Payment(id: record.id.uuidString, accountID: record.accountID?.uuidString,
+                        status: record.estimated == true ? "estimate" : record.scheduleID != nil ? "automatic" : "confirmed",
+                        description: record.description, kind: record.kind.rawValue, amount: Amount(record.money),
                         signedAmount: record.kind == .refund ? "-\(record.money.amount)" : "\(record.money.amount)",
                         paidAt: record.paidAt, account: accountName(state, record.accountID),
                         reference: record.reference.isEmpty ? nil : record.reference, autoRecorded: record.autoRecorded)
             },
-            note: "Money paid from receipts the user recorded, plus renewals recorded automatically from subscription schedules (autoRecorded: true) until a receipt confirms them. Refunds are subtracted. Not a lifetime total unless history is confirmed complete.")
+            note: "Recorded payments include confirmed entries, detected estimates and automatic renewals. Check status before calling a charge confirmed. Refunds are subtracted. Not a lifetime total unless history is confirmed complete.")
     }
 
     public static func renewals(_ state: PersistentState, withinDays: Int? = nil, now: Date = .now) -> [Renewal] {

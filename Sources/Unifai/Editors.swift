@@ -286,6 +286,7 @@ struct SettingsEditor: View {
     @State private var xHandles = ""
     @State private var newsFeeds = true
     @State private var newModels = true
+    @State private var showBackups = false
     @State private var error: String?
     private var currencies: [String] {
         let recorded = Set(store.state.payments.map(\.money.currency))
@@ -302,7 +303,12 @@ struct SettingsEditor: View {
             Section {
                 TextField("Monthly AI and cloud budget", text: $budgetAmount, prompt: Text("Leave blank for no budget"))
                 Picker("Budget currency", selection: $budgetCurrency) { ForEach(currencies, id: \.self) { Text($0).tag($0) } }
-            } header: { Text("Budget") } footer: { Text("Overview shows this month's payments against the budget, and you get a notification at 80% and 100%.") }
+            } header: { Text("Budget") } footer: { Text("Your budget includes this month's recorded payments and accruing cloud usage. Notifications use the same total at 80% and 100%.") }
+            Section {
+                Button("Review Local Backups") { showBackups = true }
+            } header: { Text("Saved data") } footer: {
+                Text("Automatic copies keep recent records recoverable on this Mac. API keys stay in Keychain.")
+            }
             Section {
                 Toggle("Refresh wallets in the background every hour", isOn: $autoRefresh)
                 Toggle("Notifications", isOn: $notifications)
@@ -327,6 +333,7 @@ struct SettingsEditor: View {
                 Text("Optional. Shows posts from these accounts in the Timeline, such as announcements of limit resets, checked every 30 minutes. X bills your developer account about US$0.005 per post read and US$0.01 per account lookup; Unifai only asks for posts newer than the last one it saw. [Get a token](https://console.x.com)")
             }
         }
+        .sheet(isPresented: $showBackups) { BackupsView(onRestore: { dismiss() }) }
         .onAppear {
             displayCurrency = store.state.displayCurrency ?? ""
             budgetAmount = store.state.monthlyBudget.map { "\($0.amount)" } ?? ""

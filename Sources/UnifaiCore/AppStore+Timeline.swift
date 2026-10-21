@@ -164,7 +164,7 @@ public extension PersistentState {
         let lines = records.map { record -> String in
             let account = accounts.first { $0.id == record.accountID }
             let provider = account.flatMap { Catalogue.integration($0.integrationID)?.name } ?? "Unknown provider"
-            return "- \(day.string(from: record.paidAt)) · \(provider) · \(record.description) · about \(record.money.plainText)"
+            return "- \(day.string(from: record.paidAt)) · \(provider) · account=\(account?.integrationID ?? "") · account_label=\(account?.label ?? "") · \(record.description) · about \(record.money.plainText)"
         }
         return """
         Find the receipts or invoices for these charges in my email or billing pages:
@@ -172,10 +172,11 @@ public extension PersistentState {
         \(lines.joined(separator: "\n"))
 
         Reply with a CSV for Unifai's Import CSV, one row per receipt, with this header:
-        date,description,amount,currency,kind,account,reference
+        date,description,amount,currency,kind,account,account_label,reference
 
-        Use the charged amount and currency from the receipt, kind subscription or usage, account as the provider id \
-        (for example codex, claude-subscription, azure-subscription, openai-api) and reference as the receipt or invoice number. \
+        Use the charged amount and currency from the receipt, kind top-up for credit purchases, subscription for plans, usage for invoices, or refund. \
+        Use account as the provider id (for example deepseek, openrouter, codex, claude-subscription, azure-subscription, openai-api), \
+        account_label as the wallet label, and reference as the receipt or invoice number. \
         Leave out anything you cannot find rather than guessing.
         """
     }

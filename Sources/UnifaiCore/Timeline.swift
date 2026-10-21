@@ -156,13 +156,24 @@ public enum TopUpWatch {
         default: break
         }
         guard let found else { return [] }
-        // Already logged by hand around now: a top-up for this wallet within three days covering the credits.
-        let logged = recorded.contains { $0.accountID == account.id && $0.kind == .topUp && $0.money.currency == found.charge.currency
-            && abs($0.paidAt.timeIntervalSince(now)) <= 3 * 86400 && $0.money.amount >= found.credits.amount }
-        guard !logged else { return [] }
+        // Only a receipt recorded within this observation interval can explain this increase.
+        // An earlier detected purchase (even after confirmation) must never swallow a new one.
+        let logged = recorded.filter {
+            $0.accountID == account.id && $0.kind == .topUp && $0.money.currency == found.charge.currency
+                && !$0.autoRecorded && $0.detection == nil && !$0.reference.hasPrefix("DETECTED-")
+                && $0.sourceReference?.hasPrefix("DETECTED-") != true
+                && $0.paidAt > old.observedAt && $0.paidAt <= new.observedAt
+                && $0.money.amount >= found.credits.amount
+        }
+        if logged.count == 1 { return [] }
         var record = PaymentRecord(accountID: account.id, description: found.description, kind: .topUp, money: found.charge, paidAt: now,
                                    reference: "DETECTED-\(account.integrationID.uppercased())-\(Int(now.timeIntervalSince1970))")
         record.estimated = true
+        let label = account.integrationID == "deepseek" ? "Purchased balance" : "Reported credits purchased"
+        if let before = detail(old, label), let after = detail(new, label) {
+            record.detection = TopUpEvidence(before: before, after: after, observedFrom: old.observedAt,
+                                             observedThrough: new.observedAt, lowerBound: account.integrationID == "deepseek")
+        }
         return [record]
     }
 }

@@ -5,7 +5,7 @@ import UnifaiCore
 // Read-only. Each call re-reads state.json, so answers follow the app's latest saved readings.
 // It never opens Keychain, never makes network requests and never writes.
 
-let serverVersion = "0.2.0"
+let serverVersion = "0.3.0"
 let supportedProtocols = ["2025-06-18", "2025-03-26", "2024-11-05"]
 
 func dataDirectory() -> URL {
@@ -45,7 +45,7 @@ let tools: [[String: Any]] = [
     [
         "name": "get_spending",
         "title": "Money paid",
-        "description": "Confirmed payments the user recorded from receipts (top-ups, subscription charges, settled usage, refunds), with totals per currency and the period the history covers.",
+        "description": "Recorded payments and refunds, including estimates and automatic renewals. Returns stable payment IDs and confirmation status. Totals stay per currency; use get_spending_breakdown to explain the dashboard including accruing usage.",
         "inputSchema": [
             "type": "object",
             "properties": [
@@ -70,7 +70,7 @@ let tools: [[String: Any]] = [
     [
         "name": "get_headroom",
         "title": "Where there is capacity now",
-        "description": "Call before heavy or long-running work to pick a provider. Ranks the user's live wallets by usable capacity right now: plan allowances with room (Codex 5-hour and weekly windows, with reset times and free resets), prepaid credit (OpenRouter, DeepSeek), then pay-as-you-go accounts that bill per use (Azure, OpenAI API), with the monthly budget. Returns a one-line recommendation first.",
+        "description": "Ranks saved wallet capacity: plan allowances, prepaid credit, then pay-as-you-go. Stale or failed readings are not treated as usable; unmeasured accounts are listed separately. Includes reset times and budget. This does not assess whether a model suits a task or whether a provider is currently operational.",
         "inputSchema": ["type": "object", "properties": [String: Any](), "additionalProperties": false],
         "annotations": ["readOnlyHint": true, "openWorldHint": false]
     ],
@@ -89,7 +89,7 @@ let tools: [[String: Any]] = [
         ],
         "annotations": ["readOnlyHint": true, "openWorldHint": false]
     ]
-]
+] + AgentTools.definitions
 
 func parseDate(_ text: String) -> Date? {
     let day = DateFormatter()
@@ -130,7 +130,7 @@ func callTool(_ name: String, _ arguments: [String: Any]) throws -> Data {
         let limit = min(200, max(0, (arguments["limit"] as? NSNumber)?.intValue ?? 30))
         return try encoder.encode(AgentReport.timeline(state, kinds: kinds, since: since, limit: limit))
     default:
-        throw ToolError(message: "Unknown tool: \(name)")
+        return try AgentTools.call(name, arguments: arguments, state: state, rates: RateStore(directory: repository.directory).load())
     }
 }
 
@@ -154,7 +154,7 @@ func handle(_ message: [String: Any]) {
             "protocolVersion": supportedProtocols.contains(requested) ? requested : supportedProtocols[0],
             "capabilities": ["tools": ["listChanged": false]],
             "serverInfo": ["name": "unifai", "title": "Unifai", "version": serverVersion],
-            "instructions": "Read-only access to the user's AI account balances, recorded payments and subscription renewals from the Unifai Mac app. Call get_overview first, get_headroom before heavy work, get_timeline for what changed (resets, limits, cost spikes, outages, releases). Readings are only as fresh as the app's last refresh; check observedAt and stale. Never add credit remaining, money paid and expected renewals together, and never combine currencies."
+            "instructions": "Read-only saved data from Unifai. Start with get_overview and get_data_health. Explain totals with get_spending_breakdown; inspect evidence with get_payment; find receipts to reconcile with get_unconfirmed_payments. Use get_account_details for cloud resource costs and wallet coverage, get_renewal_outlook for expected charges, get_headroom before heavy work and get_timeline for recent changes. None of these tools refreshes accounts, confirms payments or makes purchases. Respect freshness and missing coverage. Keep paid, estimated, accruing, expected and remaining-credit measures separate. Only use explicit currency conversions returned by the tools."
         ])
     case "ping":
         reply(id, result: [:])

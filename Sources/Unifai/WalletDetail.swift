@@ -10,6 +10,8 @@ struct WalletDetail: View {
     @Environment(\.dismiss) private var dismiss
     let accountID: UUID
     @State private var expanded: Set<String> = []
+    @State private var editingPayment: PaymentRecord?
+    @State private var paymentError: String?
 
     private var account: ConnectedAccount? { store.state.accounts.first { $0.id == accountID } }
 
@@ -38,6 +40,10 @@ struct WalletDetail: View {
         .ignoresSafeArea()
         .background(Palette.canvas.ignoresSafeArea())
         .background(SheetChrome())
+        .sheet(item: $editingPayment) { PaymentEditor(record: $0) }
+        .alert("Payment could not be updated", isPresented: Binding(get: { paymentError != nil }, set: { if !$0 { paymentError = nil } })) {
+            Button("OK", role: .cancel) { paymentError = nil }
+        } message: { Text(paymentError ?? "") }
     }
 
     // MARK: Hero
@@ -285,9 +291,21 @@ struct WalletDetail: View {
                         Text(record.description).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                         Text(record.paidAt.formatted(date: .abbreviated, time: .omitted) + (record.autoRecorded ? " · \(record.estimated == true ? "Estimate" : "Auto")" : ""))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
+                        if let evidence = record.detection {
+                            Text("Observed \(evidence.before.plainText) → \(evidence.after.plainText)")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     MoneyText(money: record.money, size: 14, prefix: record.kind == .refund ? "+" : "−")
+                    if record.autoRecorded {
+                        Button("Confirm") {
+                            do { try store.confirmPayment(record.id) }
+                            catch { paymentError = error.localizedDescription }
+                        }.buttonStyle(PillButtonStyle(compact: true)).help("Confirm that this amount matches your receipt")
+                    }
+                    Button { editingPayment = record } label: { Image(systemName: "pencil") }
+                        .buttonStyle(IconButtonStyle()).help("Correct payment details").accessibilityLabel("Edit \(record.description)")
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
             }
